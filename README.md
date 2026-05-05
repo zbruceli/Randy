@@ -1,0 +1,104 @@
+# Randy
+
+A personal multi-LLM advisory committee delivered over Telegram. Three "experts" from different vendors, each with a distinct persona, plus a facilitator that runs the meeting and synthesizes the verdict. Modeled on RAND Corp; scoped for one person's career and startup planning.
+
+The original idea is in [`Randy.md`](Randy.md). Architecture in [`ARCHITECTURE.md`](ARCHITECTURE.md). Phased plan and status in [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
+
+## What it does
+
+You DM the bot a strategic question. Within ~30-90 seconds (or 2-4 minutes with round 2 enabled), Randy returns:
+
+- A **synthesized recommendation** (Markdown) in the chat.
+- A **`.md` attachment** with the full expert drafts and any disagreements they flagged.
+- A **profile update** — durable goals, decisions, and constraints extracted from the session, used to ground future answers.
+
+The committee:
+
+| Role | Vendor / model | Job |
+|---|---|---|
+| **The Strategist** | Anthropic — `claude-sonnet-4-6` | Frame the problem, map options, name trade-offs |
+| **The Contrarian** | OpenAI — `gpt-5.5` | Find the load-bearing assumption, red-team the plan |
+| **The Operator** | DeepSeek — `deepseek-v4-pro` | Compress strategy into Monday's actions |
+| **The Facilitator** | Google — `gemini-3-pro-preview` | Run the meeting, synthesize, update the profile |
+
+Personas are defined as full system prompts in `src/randy/personas/prompts/`. They're explicit about what each role is *not*, to avoid convergence.
+
+## Telegram commands
+
+Registered with Telegram so the autocomplete menu pops on `/`.
+
+- `/ask <question>` — pose a question (or just message the bot)
+- `/profile` — what Randy remembers about you
+- `/recap` — recent sessions + topics + cost
+- `/cost` — today / this month / lifetime spend
+- `/r2 [on|off]` — toggle round 2 (forced disagreement; ~3× cost, 2-3× latency)
+- `/forget` — wipe profile (session log retained)
+- `/help` — show help
+
+## Quickstart
+
+Prerequisites: Python 3.11+, API keys for Anthropic, OpenAI, Google AI Studio, DeepSeek, and a Telegram bot token from `@BotFather`.
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev]'
+cp .env.example .env  # fill in keys + telegram token
+pytest                # unit tests, no network
+python scripts/smoke.py   # one tiny call per vendor; verifies API + cost
+python -m randy           # start the bot
+```
+
+In Telegram, find your bot, send `/start`, then ask anything.
+
+### Restricting the bot to yourself
+
+Set `TELEGRAM_ALLOWED_USER_IDS` in `.env` to a comma-separated list of numeric user IDs or `@usernames` (case-insensitive). Empty = open to anyone — only safe with a private bot token.
+
+### Cost caps
+
+`SESSION_COST_CAP_USD` and `PER_MODEL_COST_CAP_USD` (in `.env`) hard-stop a runaway consultation. Defaults: `$25` per session, `$2` per model per session.
+
+## Layout
+
+```
+src/randy/
+  config.py              env-driven settings
+  providers/             vendor adapters + cost meter + price table
+    base.py
+    anthropic_provider.py
+    openai_provider.py   chat + responses API paths
+    google_provider.py
+    deepseek_provider.py (subclasses OpenAI, /v1 base override)
+    cost_meter.py        per-model + per-session hard caps
+    pricing.py           $/MTok per model
+  personas/              persona registry + Markdown prompts
+    prompts/
+      strategist.md
+      contrarian.md
+      operator.md
+      facilitator.md
+  experts/expert.py      persona + provider wrapper; handles R2 prompt
+  orchestrator/
+    pipeline.py          clarify-skip → R1 parallel → optional R2 → synth
+    profile_updater.py   async post-session profile extraction
+  memory/
+    schema.sql           users / profile / sessions / turns / user_settings
+    store.py             SQLite CRUD + cost summary
+    profile.py           UserProfile dataclass + conservative merge
+  telegram/bot.py        bot + commands + slash menu
+prompts/                 (placeholders for future tunable templates)
+scripts/smoke.py         cross-vendor smoke test
+tests/                   pytest (cost meter, pricing, providers, personas)
+```
+
+## Notes
+
+- **Local-only**: SQLite at `./randy.sqlite`. Single user-friendly. No vector DB; the long-context Claude/Gemini calls absorb history fine at this scale.
+- **Async profile updater** runs after the user gets their answer, so it never adds visible latency.
+- **Round 2** is opt-in per user. Stored in `user_settings`. Default off.
+- **Reasoning models** (DeepSeek V4 Pro, Gemini 3 Pro) consume thought tokens. Provider adapters fall back to `reasoning_content` when `content` is empty, and we use generous `max_tokens` (3072 for experts) so the visible answer survives.
+- **OpenAI Pro models** (`gpt-X.X-pro`) require `/v1/responses`, not `/v1/chat/completions`. The OpenAI adapter routes by model-name heuristic.
+
+## Status
+
+See [`PROJECT_PLAN.md`](PROJECT_PLAN.md). All phases shipped through Phase 4 polish. Open: prompt caching, deploy automation, mid-consultation cancel.

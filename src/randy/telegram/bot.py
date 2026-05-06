@@ -8,10 +8,17 @@ import asyncio
 import io
 import logging
 
-from telegram import BotCommand, Update
+from telegram import (
+    BotCommand,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
 from telegram.constants import ChatAction
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -19,7 +26,8 @@ from telegram.ext import (
 )
 
 COMMAND_MENU = [
-    BotCommand("ask", "Pose a question to the committee"),
+    BotCommand("ask", "Pose a question (uses your profile)"),
+    BotCommand("new", "Pose a stateless question (ignores profile)"),
     BotCommand("profile", "What I remember about you"),
     BotCommand("recap", "Your recent sessions"),
     BotCommand("cost", "Today / month / lifetime spend"),
@@ -45,7 +53,8 @@ WELCOME = (
     "I'll remember durable things you tell me — goals, decisions, what you've tried — "
     "so future sessions get sharper. See /profile.\n\n"
     "Commands (also available via the / menu):\n"
-    "  /ask <question> — pose a question (or just message me)\n"
+    "  /ask <question> — pose a question (uses your profile)\n"
+    "  /new <question> — stateless question (ignores profile, won't update it)\n"
     "  /profile — what I remember about you\n"
     "  /recap — your recent sessions\n"
     "  /cost — today / this month / lifetime spend\n"
@@ -86,6 +95,22 @@ async def _gate(update: Update, allowed: set[str]) -> bool:
     return False
 
 
+async def _safe_reply(msg, text: str, **kwargs) -> None:
+    """reply_text with a fallback when Markdown parsing fails on Telegram's side.
+
+    Gemini occasionally emits unmatched `*`/`_`/`` ` `` that the legacy Markdown
+    parser rejects with BadRequest. We strip parse_mode and retry plain.
+    """
+    try:
+        await msg.reply_text(text, **kwargs)
+    except BadRequest as e:
+        if "parse" in str(e).lower() or "entit" in str(e).lower():
+            kwargs.pop("parse_mode", None)
+            await msg.reply_text(text, **kwargs)
+        else:
+            raise
+
+
 def _user_id_of(update: Update) -> str:
     user = update.effective_user
     if user is None:
@@ -117,7 +142,7 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     body = "**Your profile**\n\n" + profile.render_markdown()
     if profile.updated_at:
         body += f"\n\n_Last updated {profile.updated_at}_"
-    await update.message.reply_text(body, parse_mode="Markdown")
+    await _safe_reply(update.message, body, parse_mode="Markdown")
 
 
 async def cmd_cost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -138,7 +163,7 @@ async def cmd_cost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"  Last session: ${s['last_cost']:.4f}\n\n"
         f"_Per-session cap: ${cap_session:.0f}_"
     )
-    await update.message.reply_text(body, parse_mode="Markdown")
+    await _safe_reply(update.message, body, parse_mode="Markdown")
 
 
 async def cmd_recap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -175,7 +200,8 @@ async def cmd_r2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if not args:
         current = store.get_round2_enabled(user_id)
-        await update.message.reply_text(
+        await _safe_reply(
+            update.message,
             f"Round 2 is *{'on' if current else 'off'}*.\n\n"
             "When on: each expert sees the others' round-1 drafts, critiques them, and "
             "revises. Sharper output, ~3× cost, ~2-3× latency.\n\n"
@@ -189,12 +215,12 @@ async def cmd_r2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     falsy = {"off", "no", "false", "0", "disable", "disabled"}
     if arg in truthy:
         store.set_round2_enabled(user_id, True)
-        await update.message.reply_text("Round 2 *on*. Expect longer, sharper sessions.", parse_mode="Markdown")
+        await _safe_reply(update.message, "Round 2 *on*. Expect longer, sharper sessions.", parse_mode="Markdown")
     elif arg in falsy:
         store.set_round2_enabled(user_id, False)
-        await update.message.reply_text("Round 2 *off*. Single round only.", parse_mode="Markdown")
+        await _safe_reply(update.message, "Round 2 *off*. Single round only.", parse_mode="Markdown")
     else:
-        await update.message.reply_text("Use `/r2 on` or `/r2 off`.", parse_mode="Markdown")
+        await _safe_reply(update.message, "Use `/r2 on` or `/r2 off`.", parse_mode="Markdown")
 
 
 async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -258,7 +284,12 @@ def _format_drafts_attachment(result: ConsultationResult) -> bytes:
     return "\n".join(parts).encode("utf-8")
 
 
-async def _consult(update: Update, context: ContextTypes.DEFAULT_TYPE, question: str) -> None:
+async def _consult(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    question: str,
+    use_profile: bool = True,
+) -> None:
     allowed: set[str] = context.bot_data["allowed"]
     if not await _gate(update, allowed):
         return
@@ -275,26 +306,64 @@ async def _consult(update: Update, context: ContextTypes.DEFAULT_TYPE, question:
     store: MemoryStore = context.bot_data["store"]
     user_id = _user_id_of(update)
 
+    # Per-chat task tracking lets the cancel button find the running task.
+    tasks: dict[int, asyncio.Task] = context.bot_data.setdefault("tasks", {})
+    if chat.id in tasks and not tasks[chat.id].done():
+        await msg.reply_text("Already running a consultation here. Cancel it first.")
+        return
+
     progress_lines: list[str] = []
-    progress_msg = await msg.reply_text("Working…")
+    cancel_kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⏹ Cancel", callback_data=f"cancel:{chat.id}")]]
+    )
+    progress_msg = await msg.reply_text("Working…", reply_markup=cancel_kb)
 
     async def on_progress(line: str) -> None:
         progress_lines.append(line)
         try:
-            await progress_msg.edit_text("\n".join(progress_lines[-12:]))
+            # Trailing blank-ish line (Braille pattern blank, U+2800) prevents the
+            # inline-keyboard from visually covering the last progress line on mobile.
+            text = "\n".join(progress_lines[-12:]) + "\n⠀"
+            await progress_msg.edit_text(text, reply_markup=cancel_kb)
             await context.bot.send_chat_action(chat.id, ChatAction.TYPING)
         except Exception:
             pass
 
     round2 = store.get_round2_enabled(user_id)
-    try:
-        result = await run_consultation(
-            user_id, question, store=store, on_progress=on_progress, round2=round2
+    task = asyncio.create_task(
+        run_consultation(
+            user_id,
+            question,
+            store=store,
+            on_progress=on_progress,
+            round2=round2,
+            use_profile=use_profile,
         )
+    )
+    tasks[chat.id] = task
+    try:
+        result = await task
+    except asyncio.CancelledError:
+        logger.info("consultation cancelled for chat=%s", chat.id)
+        try:
+            await progress_msg.edit_text("⏹ Cancelled.")
+        except Exception:
+            pass
+        await msg.reply_text(
+            "Cancelled. Any expert calls already returned were billed and logged."
+        )
+        return
     except Exception as e:
         logger.exception("orchestrator failed")
         await msg.reply_text(f"Sorry, the committee errored: {type(e).__name__}: {e}")
         return
+    finally:
+        tasks.pop(chat.id, None)
+        # Strip the cancel button now that work is done (or failed).
+        try:
+            await progress_msg.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
 
     footer = (
         f"\n\n_session {result.session_id} · ${result.total_cost_usd:.4f} total"
@@ -303,11 +372,11 @@ async def _consult(update: Update, context: ContextTypes.DEFAULT_TYPE, question:
     )
     body = result.synthesis + footer
     if len(body) <= 4096:
-        await msg.reply_text(body, parse_mode="Markdown")
+        await _safe_reply(msg, body, parse_mode="Markdown")
     else:
         for i in range(0, len(result.synthesis), 3800):
-            await msg.reply_text(result.synthesis[i : i + 3800])
-        await msg.reply_text(footer.strip(), parse_mode="Markdown")
+            await _safe_reply(msg, result.synthesis[i : i + 3800])
+        await _safe_reply(msg, footer.strip(), parse_mode="Markdown")
 
     if result.expert_reports:
         attachment = _format_drafts_attachment(result)
@@ -323,7 +392,31 @@ async def _consult(update: Update, context: ContextTypes.DEFAULT_TYPE, question:
 
 async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     question = " ".join(context.args or [])
-    await _consult(update, context, question)
+    await _consult(update, context, question, use_profile=True)
+
+
+async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    question = " ".join(context.args or [])
+    await _consult(update, context, question, use_profile=False)
+
+
+async def on_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer("Cancelling…")
+    chat_id = query.message.chat.id if query.message else None
+    if chat_id is None:
+        return
+    tasks: dict[int, asyncio.Task] = context.bot_data.get("tasks", {})
+    task = tasks.get(chat_id)
+    if task and not task.done():
+        task.cancel()
+    else:
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -340,19 +433,30 @@ async def run_bot() -> None:
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
 
-    app = Application.builder().token(settings.telegram_bot_token).build()
+    # concurrent_updates lets the cancel-button callback run while a
+    # consultation handler is still awaiting its task. Without this, all
+    # updates serialize and the cancel button fires only after the work it
+    # was meant to interrupt has already finished.
+    app = (
+        Application.builder()
+        .token(settings.telegram_bot_token)
+        .concurrent_updates(True)
+        .build()
+    )
     app.bot_data["allowed"] = _parse_allowed(settings.telegram_allowed_user_ids)
     app.bot_data["store"] = MemoryStore(settings.db_path)
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("ask", cmd_ask))
+    app.add_handler(CommandHandler("new", cmd_new))
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("recap", cmd_recap))
     app.add_handler(CommandHandler("cost", cmd_cost))
     app.add_handler(CommandHandler("r2", cmd_r2))
     app.add_handler(CommandHandler("round2", cmd_r2))
     app.add_handler(CommandHandler("forget", cmd_forget))
+    app.add_handler(CallbackQueryHandler(on_cancel_callback, pattern=r"^cancel:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     me = await app.bot.get_me()

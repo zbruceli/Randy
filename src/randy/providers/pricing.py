@@ -13,9 +13,30 @@ class Price:
     input_per_mtok: float
     output_per_mtok: float
 
+    # Anthropic prompt-cache multipliers. Cache writes cost 1.25× input rate;
+    # cache reads cost 0.1× input rate. Other vendors with implicit caching
+    # discount on their side, so we don't model it.
+    CACHE_WRITE_MULT = 1.25
+    CACHE_READ_MULT = 0.10
+
     def cost(self, input_tokens: int, output_tokens: int) -> float:
         return (
             input_tokens / 1_000_000 * self.input_per_mtok
+            + output_tokens / 1_000_000 * self.output_per_mtok
+        )
+
+    def cost_with_cache(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        cache_create: int = 0,
+        cache_read: int = 0,
+    ) -> float:
+        """Bill input as: fresh + cache_create×1.25 + cache_read×0.10."""
+        return (
+            input_tokens / 1_000_000 * self.input_per_mtok
+            + cache_create / 1_000_000 * self.input_per_mtok * self.CACHE_WRITE_MULT
+            + cache_read / 1_000_000 * self.input_per_mtok * self.CACHE_READ_MULT
             + output_tokens / 1_000_000 * self.output_per_mtok
         )
 

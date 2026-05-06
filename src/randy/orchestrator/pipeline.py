@@ -152,6 +152,7 @@ async def run_consultation(
     store: MemoryStore | None = None,
     on_progress: ProgressFn | None = None,
     round2: bool = False,
+    use_profile: bool = True,
 ) -> ConsultationResult:
     session_id = uuid.uuid4().hex[:8]
     meter = CostMeter(
@@ -159,7 +160,11 @@ async def run_consultation(
         per_model_cap_usd=settings.per_model_cost_cap_usd,
     )
 
-    profile = store.get_profile(user_id) if store else UserProfile(user_id=user_id)
+    if use_profile and store:
+        profile = store.get_profile(user_id)
+    else:
+        # Stateless consultation: no prior context bleeds in, no profile update after.
+        profile = UserProfile(user_id=user_id)
 
     if store:
         store.start_session(session_id, user_id, topic=question[:120])
@@ -296,7 +301,7 @@ async def run_consultation(
 
     if store:
         store.end_session(session_id, cost_usd=meter.total)
-        if synthesis_text and not failures.get("facilitator"):
+        if use_profile and synthesis_text and not failures.get("facilitator"):
             asyncio.create_task(
                 _update_profile_in_background(store, user_id, question, synthesis_text)
             )

@@ -25,3 +25,20 @@ def test_typical_session_cost_under_cap():
         p = price_for(model)
         cost = p.cost(10_000, 3_000) * 2
         assert cost < 2.0, f"{model} two-round cost ${cost:.2f} exceeds $2/model cap"
+
+
+def test_cache_pricing_discounts_reads():
+    p = price_for("claude-sonnet-4-6")
+    full = p.cost_with_cache(input_tokens=10_000, output_tokens=0)
+    cached = p.cost_with_cache(input_tokens=0, output_tokens=0, cache_read=10_000)
+    assert cached < full
+    # Cache read at 10% means 10x cheaper for that portion.
+    assert abs(cached - full * 0.10) < 1e-6
+
+
+def test_cache_pricing_charges_writes_more():
+    p = price_for("claude-sonnet-4-6")
+    full = p.cost_with_cache(input_tokens=10_000, output_tokens=0)
+    cache_write = p.cost_with_cache(input_tokens=0, output_tokens=0, cache_create=10_000)
+    # Cache write costs 1.25x base.
+    assert abs(cache_write - full * 1.25) < 1e-6

@@ -99,6 +99,16 @@ tests/                   pytest (cost meter, pricing, providers, personas)
 - **Reasoning models** (DeepSeek V4 Pro, Gemini 3 Pro) consume thought tokens. Provider adapters fall back to `reasoning_content` when `content` is empty, and we use generous `max_tokens` (3072 for experts) so the visible answer survives.
 - **OpenAI Pro models** (`gpt-X.X-pro`) require `/v1/responses`, not `/v1/chat/completions`. The OpenAI adapter routes by model-name heuristic.
 
+## Deploy
+
+For always-on Docker, systemd, or other deployment paths see [`DEPLOY.md`](DEPLOY.md).
+
+Quick docker:
+
+```bash
+docker compose up -d --build
+```
+
 ## Status
 
 See [`PROJECT_PLAN.md`](PROJECT_PLAN.md). All phases shipped through Phase 4 polish. Open: prompt caching, deploy automation, mid-consultation cancel.

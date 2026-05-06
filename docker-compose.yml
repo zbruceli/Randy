@@ -1,0 +1,9 @@
+services:
+  randy:
+    build: .
+    container_name: randy
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    # SQLite is single-writer; one container is enough.

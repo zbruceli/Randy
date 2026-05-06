@@ -318,16 +318,33 @@ async def _consult(
     )
     progress_msg = await msg.reply_text("Working…", reply_markup=cancel_kb)
 
+    # Telegram throttles message edits to ~1/sec/chat; bursts trigger 429
+    # RetryAfter and PTB sleeps silently, blocking whoever holds the edit.
+    # A lock + min-interval debounce keeps us under the limit and prevents
+    # edits from queuing up behind R1's parallel completion bursts.
+    edit_lock = asyncio.Lock()
+    last_edit_at = 0.0
+    MIN_EDIT_INTERVAL = 1.2
+
     async def on_progress(line: str) -> None:
+        nonlocal last_edit_at
         progress_lines.append(line)
-        try:
-            # Trailing blank-ish line (Braille pattern blank, U+2800) prevents the
-            # inline-keyboard from visually covering the last progress line on mobile.
-            text = "\n".join(progress_lines[-12:]) + "\n⠀"
-            await progress_msg.edit_text(text, reply_markup=cancel_kb)
-            await context.bot.send_chat_action(chat.id, ChatAction.TYPING)
-        except Exception:
-            pass
+        now = asyncio.get_event_loop().time()
+        if now - last_edit_at < MIN_EDIT_INTERVAL:
+            return  # throttle — internal state still grows; next edit picks up the latest
+        if edit_lock.locked():
+            return  # an edit is already in flight; skip this one
+        async with edit_lock:
+            try:
+                text = "\n".join(progress_lines[-12:]) + "\n⠀"
+                await progress_msg.edit_text(text, reply_markup=cancel_kb)
+                last_edit_at = asyncio.get_event_loop().time()
+            except Exception:
+                pass
+            try:
+                await context.bot.send_chat_action(chat.id, ChatAction.TYPING)
+            except Exception:
+                pass
 
     round2 = store.get_round2_enabled(user_id)
     task = asyncio.create_task(

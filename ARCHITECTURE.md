@@ -147,6 +147,8 @@ The session log isn't fed back into context for now. It's there for `/recap`, `/
 - All vendor calls are async. R1 is `asyncio.gather` over three experts; R2 same.
 - The profile updater runs as a fire-and-forget `asyncio.create_task`. Crashes are logged and don't surface to the user.
 - SQLite access is synchronous within `MemoryStore`, called from async handlers. At single-user scale this is fine; if it ever isn't, swap to `aiosqlite` without changing the call sites (they're `def`, not `async def`).
+- `concurrent_updates(True)` on the Telegram Application — without it, callback-query updates (the cancel button) serialize behind the consultation handler and never fire while the handler is still awaiting its task.
+- Progress-edit debounce: when R1's three experts finish in quick succession, each `_run_expert` calls `on_progress("✓ done")` in parallel. Three concurrent `editMessageText` calls on the same chat trigger Telegram's ~1/sec/chat edit rate limit, and PTB's RetryAfter handler then sleeps silently — blocking gather and freezing the orchestrator. The bot wraps `on_progress` in a 1.2s debounce + `asyncio.Lock` so concurrent edits drop instead of queue, and the next eligible edit always shows the latest internal state. `chat_action` keeps firing on every call (it's not rate-limited).
 
 ## What's deliberately *not* here
 

@@ -43,15 +43,24 @@ In-flight consultations show a progress card that polls `/progress/<task_id>` ev
 
 ## Telegram commands
 
-Registered with Telegram so the autocomplete menu pops on `/`.
+Registered with Telegram so the autocomplete menu pops on `/`. Threads are **automatic** — `/ask` always starts a fresh thread, plain text continues the active one (auto-creating if none), `/new` starts a stateless thread that ignores the profile.
 
-- `/ask <question>` — pose a question (or just message the bot)
+Threads:
+- `/ask <question>` — pose a question, *starts a new thread*
+- `/new <question>` — stateless question; new thread, ignores profile, won't update it
+- `/threads` — list pinned threads as buttons; tap to make active
+- `/here` — show the current active thread
+- `/end` — leave the current thread; next message starts fresh
+
+Memory:
 - `/profile` — what Randy remembers about you
 - `/recap` — recent sessions + topics + cost
 - `/cost` — today / this month / lifetime spend
 - `/r2 [on|off]` — toggle round 2 (forced disagreement; ~3× cost, 2-3× latency)
 - `/forget` — wipe profile (session log retained)
 - `/help` — show help
+
+After every consultation the synthesis carries inline buttons: **📌 Pin** to keep the thread, **🗂 End thread** to leave it. Pinning sticks the thread to the top of `/threads` and the web home page.
 
 ## Quickstart
 

@@ -157,9 +157,13 @@ The session log isn't fed back into context for now. It's there for `/recap`, `/
 
 ### Conversations (threads)
 
-A *conversation* is a sustained thread on one topic, made up of multiple sessions linked by `conversation_id`. Created automatically when the web channel starts a fresh `/consult` (auto-titled from the question — first 60 chars). Sessions in the same conversation see each other's syntheses prepended to subsequent briefs (last 3 sessions, to keep token costs bounded).
+A *conversation* is a sustained thread on one topic, made up of multiple sessions linked by `conversation_id`. Created automatically by either channel; auto-titled from the first question (first 60 chars). Sessions in the same conversation see the last 3 syntheses prepended to subsequent briefs by `pipeline._build_thread_context`, keeping token cost predictable as a thread grows.
 
-Pinning is per-user, per-conversation. Archived conversations stay in the DB but are hidden from the home page unless explicitly listed. The Telegram bot doesn't yet expose threading — Telegram messages start a fresh, conversation-less session.
+Pinning is per-user, per-conversation. Archived conversations stay in the DB but are hidden from the home page unless explicitly listed.
+
+Both channels thread:
+- **Web**: each `/consult` POST auto-creates a conversation; the conversation page (`/c/<id>`) follow-up form attaches subsequent questions to the same thread.
+- **Telegram**: `chat_active_thread(chat_id, conversation_id)` table stores the per-chat active thread across restarts. `/ask` always starts a fresh thread; plain text continues the active one (auto-create if none); `/new` starts a stateless thread (use_profile=False); `/end`, `/threads`, `/here` give explicit control. Post-result inline keyboard offers 📌 Pin and 🗂 End thread.
 
 ## Channels
 

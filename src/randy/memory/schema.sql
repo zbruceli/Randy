@@ -53,3 +53,11 @@ CREATE TABLE IF NOT EXISTS user_settings (
     round2_enabled INTEGER NOT NULL DEFAULT 0,
     updated_at     TEXT NOT NULL
 );
+
+-- Per-Telegram-chat active thread. Lets the bot continue a thread across
+-- restarts without requiring the user to re-anchor manually.
+CREATE TABLE IF NOT EXISTS chat_active_thread (
+    chat_id         INTEGER PRIMARY KEY,
+    conversation_id TEXT REFERENCES conversations(conversation_id),
+    updated_at      TEXT NOT NULL
+);

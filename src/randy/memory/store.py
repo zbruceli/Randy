@@ -300,6 +300,28 @@ class MemoryStore:
             ).fetchall()
         return [SessionRow(**dict(r)) for r in rows]
 
+    # ---- per-chat active thread ----
+
+    def get_active_thread(self, chat_id: int) -> str | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT conversation_id FROM chat_active_thread WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+        return row["conversation_id"] if row and row["conversation_id"] else None
+
+    def set_active_thread(self, chat_id: int, conversation_id: str | None) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO chat_active_thread(chat_id, conversation_id, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    conversation_id = excluded.conversation_id,
+                    updated_at = excluded.updated_at
+                """,
+                (chat_id, conversation_id, _now()),
+            )
+
     def append_turn(
         self,
         session_id: str,

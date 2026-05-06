@@ -1,12 +1,15 @@
-"""Telegram bot — Phase 3 (multi-expert + memory).
+"""Telegram bot — auto-thread chat UX.
 
-Each /ask convenes the full committee and persists the session. The user's
-profile is loaded into the brief, and updated asynchronously after synthesis.
+Each /ask starts a fresh thread; plain messages continue the chat's active
+thread (creating one if none exists); /new starts a stateless thread that
+ignores the profile.
 """
 
 import asyncio
+import html
 import io
 import logging
+import uuid
 
 from telegram import (
     BotCommand,
@@ -26,8 +29,11 @@ from telegram.ext import (
 )
 
 COMMAND_MENU = [
-    BotCommand("ask", "Pose a question (uses your profile)"),
-    BotCommand("new", "Pose a stateless question (ignores profile)"),
+    BotCommand("ask", "Pose a question — starts a new thread"),
+    BotCommand("new", "Stateless question — new thread, ignores profile"),
+    BotCommand("threads", "List your pinned threads"),
+    BotCommand("here", "Show the current active thread"),
+    BotCommand("end", "End the current thread"),
     BotCommand("profile", "What I remember about you"),
     BotCommand("recap", "Your recent sessions"),
     BotCommand("cost", "Today / month / lifetime spend"),
@@ -44,23 +50,23 @@ from ..personas import PERSONAS
 logger = logging.getLogger("randy.telegram")
 
 WELCOME = (
-    "Hi — I'm Randy, your personal advisory committee.\n\n"
-    "Ask /ask <question> or just send a message. I convene three experts:\n"
-    "  • The Strategist (Claude)\n"
-    "  • The Contrarian (GPT-5.5)\n"
-    "  • The Operator (DeepSeek)\n"
-    "and synthesize with the Facilitator (Gemini).\n\n"
-    "I'll remember durable things you tell me — goals, decisions, what you've tried — "
-    "so future sessions get sharper. See /profile.\n\n"
-    "Commands (also available via the / menu):\n"
-    "  /ask <question> — pose a question (uses your profile)\n"
-    "  /new <question> — stateless question (ignores profile, won't update it)\n"
-    "  /profile — what I remember about you\n"
-    "  /recap — your recent sessions\n"
-    "  /cost — today / this month / lifetime spend\n"
-    "  /r2 [on|off] — enable a 2nd 'forced-disagreement' round (slower, ~3× cost)\n"
-    "  /forget — wipe my memory of you (sessions stay logged)\n"
-    "  /help — this message"
+    "<b>Randy</b> — your personal advisory committee.\n\n"
+    "Three experts (Claude · GPT-5.5 · DeepSeek), one facilitator (Gemini), "
+    "synthesized into one verdict.\n\n"
+    "<b>How threads work</b>\n"
+    "  • <code>/ask</code> — starts a new thread\n"
+    "  • plain message — continues the current thread\n"
+    "  • <code>/new</code> — new thread, ignores your profile\n"
+    "  • <code>/end</code> — leave the current thread\n\n"
+    "<b>Browsing</b>\n"
+    "  • <code>/threads</code> — your pinned threads\n"
+    "  • <code>/here</code> — what thread you're in now\n\n"
+    "<b>Memory</b>\n"
+    "  • <code>/profile</code> — what I remember about you\n"
+    "  • <code>/recap</code> — recent sessions\n"
+    "  • <code>/cost</code> — today / month / lifetime spend\n"
+    "  • <code>/r2 on|off</code> — toggle a 2nd forced-disagreement round\n"
+    "  • <code>/forget</code> — wipe profile (session log kept)\n"
 )
 
 
@@ -123,11 +129,105 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _gate(update, allowed):
         return
     if update.message:
-        await update.message.reply_text(WELCOME)
+        await _safe_reply(update.message, WELCOME, parse_mode="HTML")
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await cmd_start(update, context)
+
+
+def _title_from_question(q: str, n: int = 60) -> str:
+    q = (q or "").strip().replace("\n", " ")
+    return q if len(q) <= n else q[: n - 1] + "…"
+
+
+def _result_keyboard(conv_id: str, *, pinned: bool, in_active_thread: bool) -> InlineKeyboardMarkup:
+    row: list[InlineKeyboardButton] = []
+    if pinned:
+        row.append(InlineKeyboardButton("📍 Unpin", callback_data=f"unpin:{conv_id}"))
+    else:
+        row.append(InlineKeyboardButton("📌 Pin", callback_data=f"pin:{conv_id}"))
+    if in_active_thread:
+        row.append(InlineKeyboardButton("🗂 End thread", callback_data=f"end:{conv_id}"))
+    return InlineKeyboardMarkup([row])
+
+
+async def cmd_threads(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    allowed: set[str] = context.bot_data["allowed"]
+    if not await _gate(update, allowed):
+        return
+    if not update.message:
+        return
+    store: MemoryStore = context.bot_data["store"]
+    user_id = _user_id_of(update)
+    pinned = store.list_conversations(user_id, pinned_only=True)
+    if not pinned:
+        await _safe_reply(
+            update.message,
+            "No pinned threads yet.\n\nAfter a session, tap 📌 <b>Pin</b> under the "
+            "synthesis to keep a thread.",
+            parse_mode="HTML",
+        )
+        return
+    rows = [
+        [InlineKeyboardButton(
+            f"📌 {c.title[:40]}",
+            callback_data=f"switch:{c.conversation_id}",
+        )]
+        for c in pinned[:12]
+    ]
+    await _safe_reply(
+        update.message,
+        "<b>Your pinned threads</b>\n\nTap one to make it the active thread for this chat.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+
+
+async def cmd_here(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    allowed: set[str] = context.bot_data["allowed"]
+    if not await _gate(update, allowed):
+        return
+    if not update.message or update.effective_chat is None:
+        return
+    store: MemoryStore = context.bot_data["store"]
+    chat_id = update.effective_chat.id
+    active = store.get_active_thread(chat_id)
+    if not active:
+        await update.message.reply_text(
+            "No active thread.\n\nNext message will start one automatically."
+        )
+        return
+    conv = store.get_conversation(active)
+    if not conv:
+        store.set_active_thread(chat_id, None)
+        await update.message.reply_text("Active thread was missing; cleared.")
+        return
+    sessions = store.sessions_in_conversation(active)
+    pin_marker = "📌 " if conv.pinned else ""
+    body = (
+        f"{pin_marker}<b>{html.escape(conv.title)}</b>\n"
+        f"<i>{len(sessions)} session{'s' if len(sessions) != 1 else ''} · "
+        f"started {conv.created_at[:10]}</i>"
+    )
+    kb = _result_keyboard(active, pinned=conv.pinned, in_active_thread=True)
+    await _safe_reply(update.message, body, parse_mode="HTML", reply_markup=kb)
+
+
+async def cmd_end(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    allowed: set[str] = context.bot_data["allowed"]
+    if not await _gate(update, allowed):
+        return
+    if not update.message or update.effective_chat is None:
+        return
+    store: MemoryStore = context.bot_data["store"]
+    chat_id = update.effective_chat.id
+    active = store.get_active_thread(chat_id)
+    if not active:
+        await update.message.reply_text("No active thread to end.")
+        return
+    store.set_active_thread(chat_id, None)
+    await update.message.reply_text("Thread ended. Next message starts fresh.")
 
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -288,8 +388,14 @@ async def _consult(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     question: str,
-    use_profile: bool = True,
+    *,
+    command: str = "plain",
 ) -> None:
+    """command:
+       'ask'   — always start a new thread; uses profile.
+       'new'   — always start a new thread; ignores profile.
+       'plain' — continue active thread (auto-create if none); uses profile.
+    """
     allowed: set[str] = context.bot_data["allowed"]
     if not await _gate(update, allowed):
         return
@@ -315,6 +421,24 @@ async def _consult(
         if snap and snap.status == "running":
             await msg.reply_text("Already running a consultation here. Cancel it first.")
             return
+
+    # Resolve the conversation_id and use_profile flag based on command.
+    if command in ("ask", "new"):
+        conversation_id = uuid.uuid4().hex[:12]
+        store.create_conversation(conversation_id, user_id, _title_from_question(question))
+        store.set_active_thread(chat.id, conversation_id)
+        use_profile = command == "ask"
+    else:  # plain
+        active = store.get_active_thread(chat.id)
+        if active and store.get_conversation(active):
+            conversation_id = active
+        else:
+            conversation_id = uuid.uuid4().hex[:12]
+            store.create_conversation(
+                conversation_id, user_id, _title_from_question(question)
+            )
+            store.set_active_thread(chat.id, conversation_id)
+        use_profile = True
 
     progress_lines: list[str] = []
     cancel_kb = InlineKeyboardMarkup(
@@ -356,6 +480,7 @@ async def _consult(
         question=question,
         round2=round2,
         use_profile=use_profile,
+        conversation_id=conversation_id,
         on_progress=on_progress,
     )
     chat_tasks[chat.id] = task_id
@@ -382,6 +507,11 @@ async def _consult(
         except Exception:
             pass
 
+    conv = store.get_conversation(conversation_id)
+    is_pinned = bool(conv and conv.pinned)
+    is_active = store.get_active_thread(chat.id) == conversation_id
+    result_kb = _result_keyboard(conversation_id, pinned=is_pinned, in_active_thread=is_active)
+
     footer = (
         f"\n\n_session {result.session_id} · ${result.total_cost_usd:.4f} total"
         + (f" · {len(result.failures)} failure(s)" if result.failures else "")
@@ -389,11 +519,11 @@ async def _consult(
     )
     body = result.synthesis + footer
     if len(body) <= 4096:
-        await _safe_reply(msg, body, parse_mode="Markdown")
+        await _safe_reply(msg, body, parse_mode="Markdown", reply_markup=result_kb)
     else:
         for i in range(0, len(result.synthesis), 3800):
             await _safe_reply(msg, result.synthesis[i : i + 3800])
-        await _safe_reply(msg, footer.strip(), parse_mode="Markdown")
+        await _safe_reply(msg, footer.strip(), parse_mode="Markdown", reply_markup=result_kb)
 
     if result.expert_reports:
         attachment = _format_drafts_attachment(result)
@@ -409,12 +539,12 @@ async def _consult(
 
 async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     question = " ".join(context.args or [])
-    await _consult(update, context, question, use_profile=True)
+    await _consult(update, context, question, command="ask")
 
 
 async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     question = " ".join(context.args or [])
-    await _consult(update, context, question, use_profile=False)
+    await _consult(update, context, question, command="new")
 
 
 async def on_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -436,9 +566,64 @@ async def on_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         pass
 
 
+async def on_thread_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles pin / unpin / end / switch callbacks on result + /here messages."""
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    op, _, conv_id = query.data.partition(":")
+    if not conv_id:
+        await query.answer()
+        return
+    store: MemoryStore = context.bot_data["store"]
+    chat_id = query.message.chat.id if query.message else None
+
+    if op == "pin":
+        store.set_conversation_pinned(conv_id, True)
+        await query.answer("Pinned")
+    elif op == "unpin":
+        store.set_conversation_pinned(conv_id, False)
+        await query.answer("Unpinned")
+    elif op == "end":
+        if chat_id is not None:
+            store.set_active_thread(chat_id, None)
+        await query.answer("Thread ended")
+    elif op == "switch":
+        if chat_id is not None:
+            store.set_active_thread(chat_id, conv_id)
+        conv = store.get_conversation(conv_id)
+        title = conv.title[:40] if conv else conv_id
+        await query.answer(f"Now in: {title}")
+    else:
+        await query.answer()
+        return
+
+    # Update the keyboard to reflect new state.
+    is_active = chat_id is not None and store.get_active_thread(chat_id) == conv_id
+    conv = store.get_conversation(conv_id)
+    if conv is None:
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+    if op == "end":
+        # Remove keyboard since this message is no longer in the active thread.
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+    new_kb = _result_keyboard(conv_id, pinned=conv.pinned, in_active_thread=is_active)
+    try:
+        await query.edit_message_reply_markup(reply_markup=new_kb)
+    except Exception:
+        pass
+
+
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message and update.message.text:
-        await _consult(update, context, update.message.text)
+        await _consult(update, context, update.message.text, command="plain")
 
 
 async def run_bot() -> None:
@@ -475,7 +660,13 @@ async def run_bot() -> None:
     app.add_handler(CommandHandler("r2", cmd_r2))
     app.add_handler(CommandHandler("round2", cmd_r2))
     app.add_handler(CommandHandler("forget", cmd_forget))
+    app.add_handler(CommandHandler("threads", cmd_threads))
+    app.add_handler(CommandHandler("here", cmd_here))
+    app.add_handler(CommandHandler("end", cmd_end))
     app.add_handler(CallbackQueryHandler(on_cancel_callback, pattern=r"^cancel:"))
+    app.add_handler(
+        CallbackQueryHandler(on_thread_callback, pattern=r"^(pin|unpin|end|switch):")
+    )
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     me = await app.bot.get_me()

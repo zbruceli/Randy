@@ -71,6 +71,7 @@ class ConsultationRunner:
         *,
         round2: bool = False,
         use_profile: bool = True,
+        conversation_id: str | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> str:
         """Begin a consultation. Returns a task_id immediately."""
@@ -97,6 +98,7 @@ class ConsultationRunner:
                     on_progress=_multicast,
                     round2=round2,
                     use_profile=use_profile,
+                    conversation_id=conversation_id,
                 )
                 entry = self._tasks.get(task_id)
                 if entry is not None:

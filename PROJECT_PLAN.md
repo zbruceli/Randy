@@ -75,10 +75,17 @@ Voice, image, web UI, multi-user auth, mobile app, fine-tuning, RAG over externa
 - ✓ Conversations (threads): new `conversations` table, sessions linked by `conversation_id`, follow-ups auto-include last 3 syntheses in the brief.
 - ✓ Web dashboard at `127.0.0.1:8000`: home with pinned + recent + ask form + spend rail, conversation page with thread view + follow-up form, profile editor with HTMX inline-edit on goals/constraints/open-questions/notes.
 
+### Phase 6 — Telegram threading parity ✓
+- ✓ `chat_active_thread` table for per-chat persistent thread state.
+- ✓ Auto-thread bot logic: `/ask` starts new, plain continues, `/new` stateless+new.
+- ✓ Post-result inline keyboard: 📌 Pin / 📍 Unpin / 🗂 End thread, with state-toggling callback.
+- ✓ New commands: `/threads` (browse pinned), `/here` (show current), `/end` (leave thread).
+- ✓ HTML parse mode for static UI strings (more reliable than legacy Markdown for our copy).
+
 ### Open
-- Telegram threading (right now, Telegram sessions don't attach to a conversation; the web does).
 - Auto-title via Gemini Flash for nicer thread titles (currently first-60-chars truncate).
 - Prompt caching beyond Anthropic (OpenAI's auto-cache is implicit; Google explicit context cache).
+- Telegram Mini App pointing at the dashboard (deferred — needs public HTTPS hosting).
 
 ---
 

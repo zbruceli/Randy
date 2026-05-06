@@ -86,41 +86,16 @@ def create_app() -> FastAPI:
                 title=_title_from_question(question),
             )
 
-        # Build prior-context preface for follow-ups in an existing conversation.
-        prior_sessions = store.sessions_in_conversation(conversation_id)
-        question_with_context = question
-        if prior_sessions:
-            preface_lines = ["# Prior conversation in this thread"]
-            for s in prior_sessions[-3:]:  # last 3 turns to keep cost bounded
-                turns = store.session_turns(s.session_id)
-                synth = next(
-                    (t["content"] for t in turns if t["role"] == "facilitator"),
-                    None,
-                )
-                preface_lines.append(f"\n## {s.started_at[:10]} — {s.topic}\n")
-                if synth:
-                    preface_lines.append(synth)
-            preface_lines.append("\n# Current follow-up\n")
-            question_with_context = "\n".join(preface_lines) + question
-
-        async def _store_session_link(line: str) -> None:
-            # We need to associate the runner's freshly-created session with this
-            # conversation. The runner doesn't know about conversations; we patch
-            # the latest session row after start_session has been called inside
-            # the orchestrator. Simpler: after task completion, reconcile.
-            return None
-
         task_id = await runner.start(
             user_id=WEB_USER_ID,
-            question=question_with_context,
+            question=question,
             round2=(round2 == "on"),
             use_profile=(use_profile == "on"),
-            on_progress=_store_session_link,
+            conversation_id=conversation_id,
         )
-        # Stash the conversation_id so the polling endpoint can wire it up after the
-        # consultation completes.
-        request.app.state.pending_links = getattr(request.app.state, "pending_links", {})
-        request.app.state.pending_links[task_id] = conversation_id
+        # Remember the link so /progress can render an "open thread" link.
+        request.app.state.task_conversation = getattr(request.app.state, "task_conversation", {})
+        request.app.state.task_conversation[task_id] = conversation_id
         return _TEMPLATES.TemplateResponse(
             request,
             "_progress_card.html",
@@ -139,25 +114,12 @@ def create_app() -> FastAPI:
         if snap is None:
             raise HTTPException(404, "unknown task")
 
-        # When the consultation is done, link its session to the conversation
-        # (the runner created the session row but with no conversation_id).
-        if snap.status == "done" and snap.result:
-            pending = getattr(request.app.state, "pending_links", {})
-            conversation_id = pending.pop(task_id, None)
-            if conversation_id:
-                # SessionRow stored by orchestrator has conversation_id NULL; patch it.
-                import sqlite3
-                with sqlite3.connect(store.db_path) as conn:
-                    conn.execute(
-                        "UPDATE sessions SET conversation_id = ? WHERE session_id = ? AND conversation_id IS NULL",
-                        (conversation_id, snap.result.session_id),
-                    )
-
         template = (
             "_result_card.html"
             if snap.status in ("done", "failed", "cancelled")
             else "_progress_card.html"
         )
+        conv_id = getattr(request.app.state, "task_conversation", {}).get(task_id)
         return _TEMPLATES.TemplateResponse(
             request,
             template,
@@ -167,9 +129,7 @@ def create_app() -> FastAPI:
                 "progress_lines": snap.progress_lines,
                 "result": snap.result,
                 "error": snap.error,
-                "conversation_id": getattr(
-                    request.app.state, "pending_links", {}
-                ).get(task_id),
+                "conversation_id": conv_id,
             },
         )
 

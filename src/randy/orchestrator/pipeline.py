@@ -69,17 +69,55 @@ def _build_facilitator() -> GoogleProvider:
     return GoogleProvider(settings.google_api_key, settings.facilitator_model)
 
 
-def _build_brief(question: str, profile: UserProfile) -> str:
-    return (
-        "# About this user\n\n"
-        f"{profile.render_markdown()}\n\n"
-        "# The user's question\n\n"
-        f"{question}\n\n"
-        "Use the user-context to ground your answer. Don't repeat it back; use it."
+def _build_thread_context(store: "MemoryStore | None", conversation_id: str | None) -> str:
+    """If continuing a thread, render the last few sessions' syntheses for context.
+
+    Bounded to last 3 sessions to keep input cost predictable.
+    """
+    if not store or not conversation_id:
+        return ""
+    sessions = store.sessions_in_conversation(conversation_id)
+    if not sessions:
+        return ""
+    parts = ["# Prior conversation in this thread"]
+    for s in sessions[-3:]:
+        turns = store.session_turns(s.session_id)
+        synth = next((t["content"] for t in turns if t["role"] == "facilitator"), None)
+        parts.append(f"\n## {s.started_at[:10]} — {s.topic}\n")
+        if synth:
+            parts.append(synth)
+    parts.append("\n")
+    return "\n".join(parts)
+
+
+def _build_brief(question: str, profile: UserProfile, thread_context: str = "") -> str:
+    blocks = [
+        "# About this user",
+        "",
+        profile.render_markdown(),
+    ]
+    if thread_context:
+        blocks.extend(["", thread_context])
+    blocks.extend(
+        [
+            "",
+            "# The user's question",
+            "",
+            question,
+            "",
+            "Use the user-context and any prior thread to ground your answer. "
+            "Don't repeat it back; use it.",
+        ]
     )
+    return "\n".join(blocks)
 
 
-def _format_synthesis_brief(question: str, profile: UserProfile, drafts: dict[str, str]) -> str:
+def _format_synthesis_brief(
+    question: str,
+    profile: UserProfile,
+    drafts: dict[str, str],
+    thread_context: str = "",
+) -> str:
     blocks = []
     for key in EXPERT_KEYS:
         if key in drafts:
@@ -87,19 +125,33 @@ def _format_synthesis_brief(question: str, profile: UserProfile, drafts: dict[st
             blocks.append(f"### {title}\n\n{drafts[key]}")
     expert_section = "\n\n".join(blocks) if blocks else "(no expert drafts available — all experts failed)"
 
-    return (
-        "# About this user\n\n"
-        f"{profile.render_markdown()}\n\n"
-        "# User's question\n\n"
-        f"{question}\n\n"
-        "# Expert drafts (post round-2 critique)\n\n"
-        f"{expert_section}\n\n"
-        "# Your task\n\n"
-        "Produce the final synthesis for the user, per your persona's output format. "
-        "Use the experts' titles by name. The experts have already critiqued each other "
-        "in round 2 — surface the live disagreements that remain, don't paper over them. "
-        "Keep the response readable on a phone screen."
+    blocks = [
+        "# About this user",
+        "",
+        profile.render_markdown(),
+    ]
+    if thread_context:
+        blocks.extend(["", thread_context])
+    blocks.extend(
+        [
+            "",
+            "# User's question",
+            "",
+            question,
+            "",
+            "# Expert drafts (post round-2 critique)",
+            "",
+            expert_section,
+            "",
+            "# Your task",
+            "",
+            "Produce the final synthesis for the user, per your persona's output format. "
+            "Use the experts' titles by name. The experts have already critiqued each other "
+            "in round 2 — surface the live disagreements that remain, don't paper over them. "
+            "Keep the response readable on a phone screen.",
+        ]
     )
+    return "\n".join(blocks)
 
 
 async def _run_expert(
@@ -153,6 +205,7 @@ async def run_consultation(
     on_progress: ProgressFn | None = None,
     round2: bool = False,
     use_profile: bool = True,
+    conversation_id: str | None = None,
 ) -> ConsultationResult:
     session_id = uuid.uuid4().hex[:8]
     meter = CostMeter(
@@ -166,13 +219,17 @@ async def run_consultation(
         # Stateless consultation: no prior context bleeds in, no profile update after.
         profile = UserProfile(user_id=user_id)
 
+    thread_context = _build_thread_context(store, conversation_id) if use_profile else ""
+
     if store:
-        store.start_session(session_id, user_id, topic=question[:120])
+        store.start_session(
+            session_id, user_id, topic=question[:120], conversation_id=conversation_id
+        )
         store.append_turn(session_id, role="user", content=question)
 
     experts = _build_experts()
     facilitator = _build_facilitator()
-    brief = _build_brief(question, profile)
+    brief = _build_brief(question, profile, thread_context)
 
     if on_progress:
         await on_progress("Round 1 — three experts working in parallel…")
@@ -268,7 +325,12 @@ async def run_consultation(
         synth_resp = await facilitator.complete(
             system=PERSONAS["facilitator"].system_prompt,
             messages=[
-                {"role": "user", "content": _format_synthesis_brief(question, profile, final_drafts)}
+                {
+                    "role": "user",
+                    "content": _format_synthesis_brief(
+                        question, profile, final_drafts, thread_context
+                    ),
+                }
             ],
             max_tokens=3072,
         )

@@ -59,15 +59,26 @@ Voice, image, web UI, multi-user auth, mobile app, fine-tuning, RAG over externa
 - R2 drafts replace R1 drafts in the synthesis brief.
 - Toggled per user via `/r2 on|off`. Default off (cost / latency).
 
-### Phase 4 — Polish ✓ (mostly)
+### Phase 4 — Polish ✓
 - ✓ Cost dashboard (`/cost` — today / month / lifetime).
 - ✓ Slash-command menu via `set_my_commands` (autocomplete on `/`).
 - ✓ Graceful degrade if a vendor fails (orchestrator continues with surviving experts).
 - ✓ Reasoning-model handling (DeepSeek V4 Pro, Gemini 3 Pro, GPT-5+ token-param differences).
 - ✓ Per-session and per-model hard cost caps.
-- Open: prompt caching for repeat-context spend.
-- Open: deploy automation (Fly.io / VPS / Docker).
-- Open: cancel-mid-consultation control.
+- ✓ Anthropic prompt caching with cache-aware pricing.
+- ✓ Cancel button mid-consultation (inline keyboard + asyncio.Task.cancel).
+- ✓ Markdown-safe reply (auto-fallback to plain when Telegram parser rejects).
+- ✓ Deploy automation (Dockerfile, docker-compose, DEPLOY.md, systemd snippet).
+
+### Phase 5 — Multi-channel ✓
+- ✓ Extract `ConsultationRunner`: tasks + progress + cancel as channel-agnostic primitives. Push channels (Telegram) and pull channels (web HTMX poll) share the same surface.
+- ✓ Conversations (threads): new `conversations` table, sessions linked by `conversation_id`, follow-ups auto-include last 3 syntheses in the brief.
+- ✓ Web dashboard at `127.0.0.1:8000`: home with pinned + recent + ask form + spend rail, conversation page with thread view + follow-up form, profile editor with HTMX inline-edit on goals/constraints/open-questions/notes.
+
+### Open
+- Telegram threading (right now, Telegram sessions don't attach to a conversation; the web does).
+- Auto-title via Gemini Flash for nicer thread titles (currently first-60-chars truncate).
+- Prompt caching beyond Anthropic (OpenAI's auto-cache is implicit; Google explicit context cache).
 
 ---
 

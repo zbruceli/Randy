@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="ask">
+  <h1>Convene the committee</h1>
+  <form hx-post="/consult" hx-target="#consultation" hx-swap="innerHTML"
+        hx-on::after-request="this.reset()">
+    <textarea name="question" rows="4"
+              placeholder="What's the question? Career, startup, strategy."
+              required></textarea>
+    <div class="form-row">
+      <label>
+        <input type="checkbox" name="use_profile" checked>
+        use my profile
+      </label>
+      <label>
+        <input type="checkbox" name="round2" {% if round2_default %}checked{% endif %}>
+        round 2 (forced disagreement)
+      </label>
+      <button type="submit">Ask</button>
+    </div>
+  </form>
+  <div id="consultation"></div>
+</section>
+
+{% if pinned %}
+<section>
+  <h2>Pinned</h2>
+  <div class="card-grid">
+    {% for c in pinned %}
+      <a class="card pinned" href="/c/{{ c.conversation_id }}">
+        <div class="card-title">📌 {{ c.title }}</div>
+        <div class="card-meta">{{ c.updated_at[:10] }}</div>
+      </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if unpinned %}
+<section>
+  <h2>Recent threads</h2>
+  <div class="card-grid">
+    {% for c in unpinned %}
+      <a class="card" href="/c/{{ c.conversation_id }}">
+        <div class="card-title">{{ c.title }}</div>
+        <div class="card-meta">{{ c.updated_at[:10] }}</div>
+      </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<aside class="rail">
+  <div class="rail-block">
+    <h3>Spend</h3>
+    <div>Today: <strong>${{ '%.4f'|format(cost.today_cost) }}</strong>
+      <span class="muted">({{ cost.today_n }})</span></div>
+    <div>This month: <strong>${{ '%.4f'|format(cost.month_cost) }}</strong>
+      <span class="muted">({{ cost.month_n }})</span></div>
+    <div>Lifetime: <strong>${{ '%.4f'|format(cost.life_cost) }}</strong>
+      <span class="muted">({{ cost.life_n }})</span></div>
+  </div>
+
+  <div class="rail-block">
+    <h3>Profile <a class="small" href="/profile">edit</a></h3>
+    {% if profile.is_empty() %}
+      <div class="muted">empty — first session will populate it</div>
+    {% else %}
+      {% if profile.goals %}<div><strong>Goals:</strong> {{ profile.goals|length }}</div>{% endif %}
+      {% if profile.constraints %}<div><strong>Constraints:</strong> {{ profile.constraints|length }}</div>{% endif %}
+      {% if profile.decisions %}<div><strong>Decisions:</strong> {{ profile.decisions|length }}</div>{% endif %}
+      {% if profile.open_questions %}<div><strong>Open Qs:</strong> {{ profile.open_questions|length }}</div>{% endif %}
+    {% endif %}
+  </div>
+</aside>
+
+{% endblock %}

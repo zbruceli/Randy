@@ -19,6 +19,18 @@ class SessionRow:
     started_at: str
     ended_at: str | None
     cost_usd: float
+    conversation_id: str | None = None
+
+
+@dataclass
+class ConversationRow:
+    conversation_id: str
+    user_id: str
+    title: str
+    pinned: bool
+    archived_at: str | None
+    created_at: str
+    updated_at: str
 
 
 class MemoryStore:
@@ -30,6 +42,13 @@ class MemoryStore:
         schema = (Path(__file__).parent / "schema.sql").read_text()
         with self._conn() as conn:
             conn.executescript(schema)
+            # Migrations for older DBs created before each column existed.
+            # Each is a no-op on fresh DBs since the column is in schema.sql.
+            sessions_cols = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)")}
+            if "conversation_id" not in sessions_cols:
+                conn.execute("ALTER TABLE sessions ADD COLUMN conversation_id TEXT")
+            # WAL mode lets the bot's writes and the web app's reads coexist.
+            conn.execute("PRAGMA journal_mode=WAL")
 
     @contextmanager
     def _conn(self):
@@ -79,16 +98,27 @@ class MemoryStore:
 
     # ---- sessions ----
 
-    def start_session(self, session_id: str, user_id: str, topic: str | None) -> None:
+    def start_session(
+        self,
+        session_id: str,
+        user_id: str,
+        topic: str | None,
+        conversation_id: str | None = None,
+    ) -> None:
         self.ensure_user(user_id)
         with self._conn() as conn:
             conn.execute(
                 """
-                INSERT INTO sessions(session_id, user_id, topic, started_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO sessions(session_id, user_id, conversation_id, topic, started_at)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (session_id, user_id, topic, _now()),
+                (session_id, user_id, conversation_id, topic, _now()),
             )
+            if conversation_id is not None:
+                conn.execute(
+                    "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
+                    (_now(), conversation_id),
+                )
 
     def end_session(self, session_id: str, cost_usd: float) -> None:
         with self._conn() as conn:
@@ -133,7 +163,7 @@ class MemoryStore:
         with self._conn() as conn:
             rows = conn.execute(
                 """
-                SELECT session_id, user_id, topic, started_at, ended_at, cost_usd
+                SELECT session_id, user_id, conversation_id, topic, started_at, ended_at, cost_usd
                 FROM sessions WHERE user_id = ?
                 ORDER BY started_at DESC
                 LIMIT ?
@@ -141,6 +171,29 @@ class MemoryStore:
                 (user_id, limit),
             ).fetchall()
         return [SessionRow(**dict(r)) for r in rows]
+
+    def get_session(self, session_id: str) -> SessionRow | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT session_id, user_id, conversation_id, topic, started_at, ended_at, cost_usd
+                FROM sessions WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        return SessionRow(**dict(row)) if row else None
+
+    def session_turns(self, session_id: str) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT role, persona, model, content, tokens_in, tokens_out, cost_usd, created_at
+                FROM turns WHERE session_id = ?
+                ORDER BY turn_id ASC
+                """,
+                (session_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     # ---- turns ----
 
@@ -166,6 +219,86 @@ class MemoryStore:
                 """,
                 (user_id, 1 if enabled else 0, _now()),
             )
+
+    # ---- conversations ----
+
+    def create_conversation(self, conversation_id: str, user_id: str, title: str) -> None:
+        self.ensure_user(user_id)
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO conversations(conversation_id, user_id, title, pinned, created_at, updated_at)
+                VALUES (?, ?, ?, 0, ?, ?)
+                """,
+                (conversation_id, user_id, title, _now(), _now()),
+            )
+
+    def get_conversation(self, conversation_id: str) -> ConversationRow | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM conversations WHERE conversation_id = ?", (conversation_id,)
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["pinned"] = bool(d["pinned"])
+        return ConversationRow(**d)
+
+    def list_conversations(
+        self, user_id: str, *, pinned_only: bool = False, include_archived: bool = False
+    ) -> list[ConversationRow]:
+        where = ["user_id = ?"]
+        params: list = [user_id]
+        if pinned_only:
+            where.append("pinned = 1")
+        if not include_archived:
+            where.append("archived_at IS NULL")
+        sql = (
+            "SELECT * FROM conversations WHERE "
+            + " AND ".join(where)
+            + " ORDER BY pinned DESC, updated_at DESC"
+        )
+        with self._conn() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["pinned"] = bool(d["pinned"])
+            out.append(ConversationRow(**d))
+        return out
+
+    def update_conversation_title(self, conversation_id: str, title: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE conversations SET title = ?, updated_at = ? WHERE conversation_id = ?",
+                (title, _now(), conversation_id),
+            )
+
+    def set_conversation_pinned(self, conversation_id: str, pinned: bool) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE conversations SET pinned = ?, updated_at = ? WHERE conversation_id = ?",
+                (1 if pinned else 0, _now(), conversation_id),
+            )
+
+    def archive_conversation(self, conversation_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE conversations SET archived_at = ?, pinned = 0 WHERE conversation_id = ?",
+                (_now(), conversation_id),
+            )
+
+    def sessions_in_conversation(self, conversation_id: str) -> list[SessionRow]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT session_id, user_id, conversation_id, topic, started_at, ended_at, cost_usd
+                FROM sessions WHERE conversation_id = ?
+                ORDER BY started_at ASC
+                """,
+                (conversation_id,),
+            ).fetchall()
+        return [SessionRow(**dict(r)) for r in rows]
 
     def append_turn(
         self,

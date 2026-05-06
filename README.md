@@ -1,16 +1,19 @@
 # Randy
 
-A personal multi-LLM advisory committee delivered over Telegram. Three "experts" from different vendors, each with a distinct persona, plus a facilitator that runs the meeting and synthesizes the verdict. Modeled on RAND Corp; scoped for one person's career and startup planning.
+A personal multi-LLM advisory committee delivered over Telegram **and** a local web dashboard. Three "experts" from different vendors, each with a distinct persona, plus a facilitator that runs the meeting and synthesizes the verdict. Modeled on RAND Corp; scoped for one person's career and startup planning.
 
 The original idea is in [`Randy.md`](Randy.md). Architecture in [`ARCHITECTURE.md`](ARCHITECTURE.md). Phased plan and status in [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
 
 ## What it does
 
-You DM the bot a strategic question. Within ~30-90 seconds (or 2-4 minutes with round 2 enabled), Randy returns:
+Two delivery channels, one orchestrator:
 
-- A **synthesized recommendation** (Markdown) in the chat.
-- A **`.md` attachment** with the full expert drafts and any disagreements they flagged.
-- A **profile update** — durable goals, decisions, and constraints extracted from the session, used to ground future answers.
+- **Telegram bot** — fast capture-and-go. DM a question, get a synthesized recommendation back in ~30-90s, with the full expert drafts as a `.md` attachment.
+- **Web dashboard** (`127.0.0.1:8000`) — for review and threading. Pinned conversations, follow-ups that auto-include prior synthesis, an editable profile, and a spend rail. HTMX-powered, server-rendered, no JS framework.
+
+Both share the same SQLite database, the same `ConsultationRunner`, and the same persona/orchestrator stack. A session started in Telegram is visible in the web app, and vice versa.
+
+After each session, Randy auto-extracts durable goals, decisions, and constraints into a profile that grounds future answers.
 
 The committee:
 
@@ -22,6 +25,21 @@ The committee:
 | **The Facilitator** | Google — `gemini-3-pro-preview` | Run the meeting, synthesize, update the profile |
 
 Personas are defined as full system prompts in `src/randy/personas/prompts/`. They're explicit about what each role is *not*, to avoid convergence.
+
+## Web dashboard
+
+Run alongside the bot (it's a separate process — they share the SQLite DB in WAL mode):
+
+```bash
+python -m randy.web   # listens on 127.0.0.1:8000
+```
+
+Pages:
+- `/` — ask form + pinned conversations + recent threads + spend rail.
+- `/c/<id>` — conversation thread view; follow-up form prepends prior synthesis automatically. Pin / archive / rename.
+- `/profile` — inline-editable profile (save on blur for goals, constraints, open questions, notes; ✕ buttons remove auto-populated decisions or things-tried entries).
+
+In-flight consultations show a progress card that polls `/progress/<task_id>` every 2s and swaps in the result when done. The same ⏹ Cancel button as the Telegram bot.
 
 ## Telegram commands
 
@@ -70,7 +88,7 @@ src/randy/
     google_provider.py
     deepseek_provider.py (subclasses OpenAI, /v1 base override)
     cost_meter.py        per-model + per-session hard caps
-    pricing.py           $/MTok per model
+    pricing.py           $/MTok per model + cache-aware pricing
   personas/              persona registry + Markdown prompts
     prompts/
       strategist.md
@@ -79,13 +97,18 @@ src/randy/
       facilitator.md
   experts/expert.py      persona + provider wrapper; handles R2 prompt
   orchestrator/
-    pipeline.py          clarify-skip → R1 parallel → optional R2 → synth
+    pipeline.py          channel-agnostic: R1 parallel → optional R2 → synth
+    runner.py            ConsultationRunner: tasks, progress, cancel — used by all channels
     profile_updater.py   async post-session profile extraction
   memory/
-    schema.sql           users / profile / sessions / turns / user_settings
-    store.py             SQLite CRUD + cost summary
+    schema.sql           users / profile / sessions / turns / user_settings / conversations
+    store.py             SQLite CRUD + cost summary + idempotent migrations
     profile.py           UserProfile dataclass + conservative merge
-  telegram/bot.py        bot + commands + slash menu
+  telegram/bot.py        Telegram channel: bot + commands + slash menu
+  web/                   Web channel: FastAPI + Jinja + HTMX
+    app.py               routes + handlers
+    templates/           home / conversation / profile + HTMX partials
+    static/style.css
 prompts/                 (placeholders for future tunable templates)
 scripts/smoke.py         cross-vendor smoke test
 tests/                   pytest (cost meter, pricing, providers, personas)

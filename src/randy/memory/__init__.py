@@ -1,4 +1,10 @@
 from .profile import UserProfile, merge_profile_update
-from .store import MemoryStore, SessionRow
+from .store import ConversationRow, MemoryStore, SessionRow
 
-__all__ = ["MemoryStore", "SessionRow", "UserProfile", "merge_profile_update"]
+__all__ = [
+    "ConversationRow",
+    "MemoryStore",
+    "SessionRow",
+    "UserProfile",
+    "merge_profile_update",
+]

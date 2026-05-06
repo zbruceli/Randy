@@ -7,10 +7,15 @@ Three ways to run Randy. All assume you've populated `.env` with API keys + Tele
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
+
+# In one terminal — Telegram bot:
 python -m randy
+
+# In another — web dashboard at http://127.0.0.1:8000:
+python -m randy.web
 ```
 
-DB lands at `./randy.sqlite`.
+DB lands at `./randy.sqlite`. Both processes use it; SQLite is in WAL mode so they don't fight.
 
 ## 2. Docker Compose (recommended for personal always-on)
 

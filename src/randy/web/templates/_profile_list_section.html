@@ -1,0 +1,16 @@
+<div class="profile-section" id="profile-{{ field }}">
+  <div class="profile-section-header">
+    <h3>{{ label }}</h3>
+    <span class="muted small">save on blur — one per line</span>
+  </div>
+  <form>
+    <textarea
+      name="lines"
+      rows="{{ [3, ((profile|attr(field))|length) + 1]|max }}"
+      hx-post="/profile/list/{{ field }}"
+      hx-trigger="blur changed"
+      hx-target="#profile-{{ field }}"
+      hx-swap="outerHTML"
+      placeholder="(empty)">{{ "\n".join(profile|attr(field)) }}</textarea>
+  </form>
+</div>

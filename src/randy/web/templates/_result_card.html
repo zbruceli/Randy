@@ -1,0 +1,36 @@
+{% if status == "done" and result %}
+<div class="result-card">
+  <div class="result-header">
+    <span class="dot done"></span>
+    <strong>Done.</strong>
+    <span class="muted">${{ '%.4f'|format(result.total_cost_usd) }}</span>
+    {% if conversation_id %}
+      <a class="small" href="/c/{{ conversation_id }}">open thread →</a>
+    {% endif %}
+  </div>
+  <div class="synthesis">
+    <pre>{{ result.synthesis }}</pre>
+  </div>
+  {% if result.expert_reports %}
+  <details class="experts">
+    <summary>Expert drafts ({{ result.expert_reports|length }})</summary>
+    {% for key, text in result.expert_reports.items() %}
+      <div class="expert">
+        <h4>{{ key|capitalize }}</h4>
+        <pre>{{ text }}</pre>
+      </div>
+    {% endfor %}
+  </details>
+  {% endif %}
+</div>
+{% elif status == "cancelled" %}
+<div class="result-card cancelled">
+  <strong>⏹ Cancelled.</strong>
+  <div class="muted">Any expert calls already returned were billed and logged.</div>
+</div>
+{% elif status == "failed" %}
+<div class="result-card failed">
+  <strong>✗ Failed.</strong>
+  <pre class="error">{{ error or "unknown error" }}</pre>
+</div>
+{% endif %}

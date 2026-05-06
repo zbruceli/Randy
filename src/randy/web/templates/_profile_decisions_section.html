@@ -1,0 +1,25 @@
+<div class="profile-section" id="profile-decisions">
+  <div class="profile-section-header">
+    <h3>Decisions</h3>
+    <span class="muted small">auto-populated; click ✕ to remove</span>
+  </div>
+  {% if profile.decisions %}
+  <ul class="record-list">
+    {% for d in profile.decisions %}
+    <li>
+      <button class="x-btn"
+              hx-post="/profile/decisions/delete/{{ loop.index0 }}"
+              hx-target="#profile-decisions"
+              hx-swap="outerHTML"
+              hx-confirm="Remove this decision?"
+              title="remove">✕</button>
+      <span class="record-date">{{ d.date }}</span>
+      <span class="record-what">{{ d.what }}</span>
+      {% if d.why %}<span class="muted record-why">— {{ d.why }}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="muted">none yet</div>
+  {% endif %}
+</div>

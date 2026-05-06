@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}{{ conv.title }} — Randy{% endblock %}
+{% block content %}
+
+<section class="thread-header">
+  <a href="/" class="muted small">← all threads</a>
+  <h1>
+    {% if conv.pinned %}📌 {% endif %}{{ conv.title }}
+  </h1>
+  <div class="thread-actions">
+    <form method="post" action="/c/{{ conv.conversation_id }}/pin" style="display:inline">
+      <button class="ghost">{{ "Unpin" if conv.pinned else "Pin" }}</button>
+    </form>
+    <form method="post" action="/c/{{ conv.conversation_id }}/archive" style="display:inline"
+          hx-confirm="Archive this thread?">
+      <button class="ghost">Archive</button>
+    </form>
+    <span class="muted small">started {{ conv.created_at[:10] }} · {{ sessions|length }} session{{ "s" if sessions|length != 1 else "" }}</span>
+  </div>
+</section>
+
+<section class="thread">
+  {% for s in sessions %}
+    <article class="session">
+      <div class="session-meta">
+        <span class="muted">{{ s.session.started_at[:16] }}</span>
+        <span class="muted">${{ '%.4f'|format(s.session.cost_usd) }}</span>
+      </div>
+      <div class="question">{{ s.session.topic }}</div>
+      {% if s.synthesis %}
+      <div class="synthesis"><pre>{{ s.synthesis }}</pre></div>
+      {% else %}
+      <div class="muted">_(synthesis missing — session may have been cancelled)_</div>
+      {% endif %}
+      {% if s.experts %}
+      <details class="experts">
+        <summary>Expert drafts ({{ s.experts|length }})</summary>
+        {% for t in s.experts %}
+          <div class="expert">
+            <h4>{{ t.persona|capitalize }} <span class="muted small">{{ t.role }} · {{ t.model }}</span></h4>
+            <pre>{{ t.content }}</pre>
+          </div>
+        {% endfor %}
+      </details>
+      {% endif %}
+    </article>
+  {% endfor %}
+</section>
+
+<section class="ask follow-up">
+  <h2>Continue this thread</h2>
+  <form hx-post="/consult" hx-target="#consultation" hx-swap="innerHTML"
+        hx-on::after-request="this.reset()">
+    <input type="hidden" name="conversation_id" value="{{ conv.conversation_id }}">
+    <textarea name="question" rows="3"
+              placeholder="Follow-up question — prior synthesis is auto-included."
+              required></textarea>
+    <div class="form-row">
+      <label>
+        <input type="checkbox" name="use_profile" checked> use my profile
+      </label>
+      <label>
+        <input type="checkbox" name="round2" {% if round2_default %}checked{% endif %}> round 2
+      </label>
+      <button type="submit">Ask</button>
+    </div>
+  </form>
+  <div id="consultation"></div>
+</section>
+
+{% endblock %}

@@ -1,0 +1,16 @@
+<div class="profile-section" id="profile-notes">
+  <div class="profile-section-header">
+    <h3>Notes</h3>
+    <span class="muted small">save on blur</span>
+  </div>
+  <form>
+    <textarea
+      name="notes"
+      rows="{{ [4, (profile.notes.count('\n')) + 2]|max }}"
+      hx-post="/profile/notes"
+      hx-trigger="blur changed"
+      hx-target="#profile-notes"
+      hx-swap="outerHTML"
+      placeholder="(empty)">{{ profile.notes }}</textarea>
+  </form>
+</div>

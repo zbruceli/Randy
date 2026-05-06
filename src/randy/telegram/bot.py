@@ -38,7 +38,7 @@ COMMAND_MENU = [
 
 from ..config import settings
 from ..memory import MemoryStore
-from ..orchestrator import ConsultationResult, run_consultation
+from ..orchestrator import ConsultationResult, ConsultationRunner
 from ..personas import PERSONAS
 
 logger = logging.getLogger("randy.telegram")
@@ -304,13 +304,17 @@ async def _consult(
         return
 
     store: MemoryStore = context.bot_data["store"]
+    runner: ConsultationRunner = context.bot_data["runner"]
     user_id = _user_id_of(update)
 
-    # Per-chat task tracking lets the cancel button find the running task.
-    tasks: dict[int, asyncio.Task] = context.bot_data.setdefault("tasks", {})
-    if chat.id in tasks and not tasks[chat.id].done():
-        await msg.reply_text("Already running a consultation here. Cancel it first.")
-        return
+    # Per-chat task_id tracking so the cancel button can map chat → task.
+    chat_tasks: dict[int, str] = context.bot_data.setdefault("chat_tasks", {})
+    existing = chat_tasks.get(chat.id)
+    if existing:
+        snap = runner.get_progress(existing)
+        if snap and snap.status == "running":
+            await msg.reply_text("Already running a consultation here. Cancel it first.")
+            return
 
     progress_lines: list[str] = []
     cancel_kb = InlineKeyboardMarkup(
@@ -347,21 +351,18 @@ async def _consult(
                 pass
 
     round2 = store.get_round2_enabled(user_id)
-    task = asyncio.create_task(
-        run_consultation(
-            user_id,
-            question,
-            store=store,
-            on_progress=on_progress,
-            round2=round2,
-            use_profile=use_profile,
-        )
+    task_id = await runner.start(
+        user_id=user_id,
+        question=question,
+        round2=round2,
+        use_profile=use_profile,
+        on_progress=on_progress,
     )
-    tasks[chat.id] = task
+    chat_tasks[chat.id] = task_id
     try:
-        result = await task
+        result = await runner.wait(task_id)
     except asyncio.CancelledError:
-        logger.info("consultation cancelled for chat=%s", chat.id)
+        logger.info("consultation cancelled for chat=%s task=%s", chat.id, task_id)
         try:
             await progress_msg.edit_text("⏹ Cancelled.")
         except Exception:
@@ -375,8 +376,7 @@ async def _consult(
         await msg.reply_text(f"Sorry, the committee errored: {type(e).__name__}: {e}")
         return
     finally:
-        tasks.pop(chat.id, None)
-        # Strip the cancel button now that work is done (or failed).
+        chat_tasks.pop(chat.id, None)
         try:
             await progress_msg.edit_reply_markup(reply_markup=None)
         except Exception:
@@ -425,15 +425,15 @@ async def on_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat_id = query.message.chat.id if query.message else None
     if chat_id is None:
         return
-    tasks: dict[int, asyncio.Task] = context.bot_data.get("tasks", {})
-    task = tasks.get(chat_id)
-    if task and not task.done():
-        task.cancel()
-    else:
-        try:
-            await query.edit_message_reply_markup(reply_markup=None)
-        except Exception:
-            pass
+    runner: ConsultationRunner = context.bot_data["runner"]
+    chat_tasks: dict[int, str] = context.bot_data.get("chat_tasks", {})
+    task_id = chat_tasks.get(chat_id)
+    if task_id and runner.cancel(task_id):
+        return
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -461,7 +461,9 @@ async def run_bot() -> None:
         .build()
     )
     app.bot_data["allowed"] = _parse_allowed(settings.telegram_allowed_user_ids)
-    app.bot_data["store"] = MemoryStore(settings.db_path)
+    store = MemoryStore(settings.db_path)
+    app.bot_data["store"] = store
+    app.bot_data["runner"] = ConsultationRunner(store)
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))

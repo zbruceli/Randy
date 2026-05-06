@@ -1,0 +1,20 @@
+<div class="progress-card"
+     hx-get="/progress/{{ task_id }}"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML">
+  <div class="progress-header">
+    <span class="dot pulse"></span>
+    <strong>Working…</strong>
+    <button class="cancel-btn"
+            hx-post="/cancel/{{ task_id }}"
+            hx-swap="none">⏹ Cancel</button>
+  </div>
+  {% if question %}
+  <div class="muted q">{{ question }}</div>
+  {% endif %}
+  <ul class="progress-list">
+  {% for line in progress_lines[-12:] %}
+    <li>{{ line }}</li>
+  {% endfor %}
+  </ul>
+</div>

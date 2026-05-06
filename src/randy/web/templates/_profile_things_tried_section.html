@@ -1,0 +1,25 @@
+<div class="profile-section" id="profile-things-tried">
+  <div class="profile-section-header">
+    <h3>Things tried</h3>
+    <span class="muted small">auto-populated; click ✕ to remove</span>
+  </div>
+  {% if profile.things_tried %}
+  <ul class="record-list">
+    {% for t in profile.things_tried %}
+    <li>
+      <button class="x-btn"
+              hx-post="/profile/things-tried/delete/{{ loop.index0 }}"
+              hx-target="#profile-things-tried"
+              hx-swap="outerHTML"
+              hx-confirm="Remove this entry?"
+              title="remove">✕</button>
+      <span class="record-date">{{ t.date }}</span>
+      <span class="record-what">{{ t.what }}</span>
+      {% if t.outcome %}<span class="muted record-why">→ {{ t.outcome }}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="muted">none yet</div>
+  {% endif %}
+</div>

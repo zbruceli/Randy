@@ -2,20 +2,32 @@
 
 ## High-level shape
 
+Two delivery channels share one orchestrator stack and one SQLite store. The `ConsultationRunner` sits between the channels and the pure orchestrator pipeline so task tracking, progress streaming, and cancellation are not duplicated.
+
 ```
-┌──────────────┐
-│   Telegram   │
-│ (@RandyBot)  │
-└──────┬───────┘
-       │ /ask <question>
-┌──────▼─────────────────────────────────────────────────┐
-│ randy.telegram.bot                                     │
-│   gating · slash menu · /profile /recap /cost /r2      │
-│   progress pings · md attachments                      │
-└──────┬─────────────────────────────────────────────────┘
-       │
-┌──────▼─────────────────────────────────────────────────┐
-│ randy.orchestrator.pipeline.run_consultation           │
+┌──────────────┐                         ┌──────────────────┐
+│   Telegram   │                         │  Web (HTMX/JJ)   │
+│  (@RandyBot) │                         │ 127.0.0.1:8000   │
+└──────┬───────┘                         └────────┬─────────┘
+       │ /ask, /new, /r2…                         │ POST /consult, /c/<id>…
+┌──────▼─────────────────────┐    ┌───────────────▼───────────────┐
+│ randy.telegram.bot         │    │ randy.web.app                  │
+│   gating · slash menu      │    │   FastAPI · Jinja · HTMX       │
+│   progress pings           │    │   pinned threads · profile UI  │
+│   md attachments           │    │   poll /progress/<task>        │
+└──────┬─────────────────────┘    └────────┬───────────────────────┘
+       │                                   │
+       │   push: on_progress callback      │   pull: runner.get_progress
+       └────────────┬──────────────────────┘
+                    │
+┌───────────────────▼──────────────────────────────────────┐
+│ randy.orchestrator.runner.ConsultationRunner             │
+│   task_id → asyncio.Task + progress lines + result       │
+│   start() · subscribe() · get_progress() · wait() · cancel│
+└───────────────────┬──────────────────────────────────────┘
+                    │ wraps
+┌───────────────────▼──────────────────────────────────────┐
+│ randy.orchestrator.pipeline.run_consultation             │
 │                                                        │
 │   1. Load profile (from MemoryStore)                   │
 │   2. Build brief (profile + question)                  │
@@ -46,15 +58,16 @@
                             └─────────────────────────┘
 ```
 
-Flow per `/ask`:
+Flow per consultation (any channel):
 
-1. Bot accepts the message, gates by allowlist, pulls user-level R2 setting.
-2. Orchestrator loads the profile and constructs the brief that goes to every expert.
-3. Round 1: three experts run in parallel through `asyncio.gather`. Each call goes through its own provider adapter, which normalizes I/O and bills the cost meter.
-4. If R2 is enabled and ≥2 experts survived R1 and there's cost headroom, a second round runs. Each expert receives the *other* experts' R1 drafts and is asked to (a) critique each by name, (b) revise, (c) name what would change their mind.
-5. Facilitator (Gemini Pro) synthesizes the final answer, working from R2 drafts where available else R1.
-6. The session and every turn are persisted before the user sees the reply.
-7. Profile updater runs async, after the reply has been delivered. Adds zero visible latency.
+1. Channel receives input (Telegram message or web form), gates if needed.
+2. Channel calls `runner.start(user_id, question, ...)` → returns a `task_id` immediately. Push channels (Telegram) also register an `on_progress` callback; pull channels (web) poll `runner.get_progress(task_id)`.
+3. Inside the runner, `run_consultation` loads the profile (or skips it for `/new`), constructs the brief, and dispatches.
+4. Round 1: three experts run in parallel through `asyncio.gather`. Each call goes through its own provider adapter, which normalizes I/O and bills the cost meter.
+5. If R2 is enabled and ≥2 experts survived R1 and there's cost headroom, a second round runs. Each expert receives the *other* experts' R1 drafts and is asked to (a) critique each by name, (b) revise, (c) name what would change their mind.
+6. Facilitator (Gemini Pro) synthesizes the final answer, working from R2 drafts where available else R1.
+7. The session and every turn are persisted before the user sees the reply.
+8. Profile updater runs async, after the reply has been delivered. Adds zero visible latency.
 
 ## Provider layer
 
@@ -141,6 +154,28 @@ The session log isn't fed back into context for now. It's there for `/recap`, `/
 ### Settings
 
 `user_settings` table holds per-user toggles. Currently only `round2_enabled`. Defaults to off.
+
+### Conversations (threads)
+
+A *conversation* is a sustained thread on one topic, made up of multiple sessions linked by `conversation_id`. Created automatically when the web channel starts a fresh `/consult` (auto-titled from the question — first 60 chars). Sessions in the same conversation see each other's syntheses prepended to subsequent briefs (last 3 sessions, to keep token costs bounded).
+
+Pinning is per-user, per-conversation. Archived conversations stay in the DB but are hidden from the home page unless explicitly listed. The Telegram bot doesn't yet expose threading — Telegram messages start a fresh, conversation-less session.
+
+## Channels
+
+### Telegram (`randy.telegram.bot`)
+
+- Push-style: registers an `on_progress` callback when calling `runner.start(...)`, awaits the task with `runner.wait(task_id)`.
+- Cancel button is an inline keyboard with `callback_data="cancel:<chat_id>"`. The bot maps `chat_id → task_id` in `bot_data["chat_tasks"]` and calls `runner.cancel(task_id)`.
+- Requires `concurrent_updates(True)` — without it, the cancel callback queues behind the consultation handler.
+- Progress edits are debounced (1.2s + asyncio.Lock) to avoid Telegram's ~1/sec/chat edit rate limit deadlocking the orchestrator when R1 experts finish in quick succession.
+
+### Web (`randy.web.app`)
+
+- Pull-style: HTMX polls `/progress/<task_id>` every 2s. Server returns a partial — either the still-running progress card or the final result card.
+- Form posts to `/consult` return the placeholder card immediately (HTMX swap). Polling kicks in from there.
+- One process per channel — `python -m randy` and `python -m randy.web`. SQLite in WAL mode handles concurrent reads from web and writes from bot.
+- Local-only by design (`127.0.0.1:8000`). No auth, no TLS. If you want it remote, add a reverse proxy with auth.
 
 ## Concurrency notes
 

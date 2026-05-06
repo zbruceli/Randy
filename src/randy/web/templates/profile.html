@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Profile — Randy{% endblock %}
+{% block content %}
+
+<section>
+  <div class="profile-header">
+    <h1>Profile</h1>
+    <form method="post" action="/profile/forget"
+          hx-confirm="Wipe the entire profile? Session log is kept."
+          style="display:inline">
+      <button class="ghost danger">Wipe profile</button>
+    </form>
+  </div>
+  <p class="muted">
+    What Randy remembers about you. Edits to <em>goals</em>, <em>constraints</em>,
+    <em>open questions</em>, and <em>notes</em> save on blur.
+    <em>Decisions</em> and <em>things tried</em> are auto-populated; remove individual
+    entries with ✕.
+  </p>
+
+  {% set field = "goals" %}{% set label = "Goals" %}
+  {% include "_profile_list_section.html" %}
+  {% set field = "constraints" %}{% set label = "Constraints" %}
+  {% include "_profile_list_section.html" %}
+  {% set field = "open_questions" %}{% set label = "Open Questions" %}
+  {% include "_profile_list_section.html" %}
+
+  {% include "_profile_notes_section.html" %}
+
+  {% include "_profile_decisions_section.html" %}
+
+  {% include "_profile_things_tried_section.html" %}
+
+  {% if profile.facts %}
+  <div class="profile-section">
+    <div class="profile-section-header">
+      <h3>Facts</h3>
+      <span class="muted small">auto-populated</span>
+    </div>
+    <ul class="record-list">
+      {% for k, v in profile.facts.items() %}
+      <li><strong>{{ k }}:</strong> {{ v }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if profile.updated_at %}
+  <p class="muted small">Last updated {{ profile.updated_at }}</p>
+  {% endif %}
+</section>
+
+{% endblock %}

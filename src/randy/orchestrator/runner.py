@@ -38,6 +38,7 @@ _RETENTION_SECONDS = 300.0
 class ProgressSnapshot:
     task_id: str
     status: TaskStatus
+    question: str
     progress_lines: list[str]
     result: ConsultationResult | None = None
     error: str | None = None
@@ -145,6 +146,7 @@ class ConsultationRunner:
         return ProgressSnapshot(
             task_id=task_id,
             status=entry.status,
+            question=entry.question,
             progress_lines=list(entry.progress_lines),
             result=entry.result,
             error=entry.error,

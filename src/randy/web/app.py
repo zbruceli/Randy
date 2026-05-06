@@ -131,6 +131,7 @@ def create_app() -> FastAPI:
             {
                 "task_id": task_id,
                 "status": snap.status,
+                "question": snap.question,
                 "progress_lines": snap.progress_lines,
                 "result": snap.result,
                 "error": snap.error,

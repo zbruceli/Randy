@@ -8,6 +8,9 @@
       <a class="small" href="/c/{{ conversation_id }}">open thread →</a>
     {% endif %}
   </div>
+  {% if question %}
+  <div class="q">{{ question }}</div>
+  {% endif %}
   <div class="synthesis">
     <pre>{{ result.synthesis }}</pre>
   </div>

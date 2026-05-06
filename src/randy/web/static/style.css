@@ -185,7 +185,16 @@ button.ghost:hover { background: var(--pre-bg); }
   color: var(--muted);
 }
 .progress-list li { padding: 0.15rem 0; }
-.q { margin-bottom: 0.5rem; font-style: italic; }
+.q {
+  margin: 0.5rem 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--accent);
+  background: var(--pre-bg);
+  border-radius: 0 4px 4px 0;
+  font-style: italic;
+  color: var(--fg);
+  font-size: 0.95rem;
+}
 
 .synthesis pre, .expert pre, .error {
   background: var(--pre-bg);

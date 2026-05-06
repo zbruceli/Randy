@@ -45,19 +45,24 @@ The web binds to `0.0.0.0` so phones on the LAN can reach it (e.g. `http://192.1
 
 ### One-time setup
 
-On the server (assumes a sudoer user, e.g. `bruceli`):
+Tested on Ubuntu 24.04 LTS (Python 3.12). Should work on any distro with Python ≥ 3.11. On Ubuntu 22.04 (Python 3.10), enable the deadsnakes PPA and substitute `python3.11` for `python3` below.
+
+On the server (assumes a sudoer user):
 
 ```bash
-# Prereqs
+# Prereqs — uses the system python3 (3.12 on Ubuntu 24.04, 3.10 on 22.04).
+# If on 22.04, add deadsnakes first:
+#   sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt update
+#   then `python3.11` in place of `python3` for the steps below.
 sudo apt update
-sudo apt install -y python3.11 python3.11-venv python3.11-dev git build-essential
+sudo apt install -y python3 python3-venv python3-dev git build-essential
 
 # Clone
 git clone https://github.com/zbruceli/Randy.git ~/randy
 cd ~/randy
 
 # Virtualenv + install
-python3.11 -m venv .venv
+python3 -m venv .venv
 .venv/bin/pip install -q -e '.[dev]'
 
 # Secrets

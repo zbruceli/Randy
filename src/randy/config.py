@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     session_cost_cap_usd: float = 25.0
     per_model_cost_cap_usd: float = 2.0
 
+    # Web dashboard bind address. Default 127.0.0.1 keeps it local-only on dev
+    # machines; set to 0.0.0.0 on a LAN server so other devices on the network
+    # can reach it.
+    web_host: str = "127.0.0.1"
+    web_port: int = 8000
+
     facilitator_model: str = "gemini-3-pro-preview"
     expert_anthropic_model: str = "claude-sonnet-4-6"
     expert_openai_model: str = "gpt-5.5"

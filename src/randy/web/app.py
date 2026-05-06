@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -42,6 +42,11 @@ def create_app() -> FastAPI:
     static_dir = _BASE_DIR / "static"
     static_dir.mkdir(exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon():
+        # Serve the SVG when browsers default-request /favicon.ico (no <link>).
+        return FileResponse(str(static_dir / "favicon.svg"), media_type="image/svg+xml")
 
     @app.get("/", response_class=HTMLResponse)
     async def home(request: Request):
@@ -262,8 +267,8 @@ def run_web() -> None:
     )
     uvicorn.run(
         "randy.web.app:create_app",
-        host="127.0.0.1",
-        port=8000,
+        host=settings.web_host,
+        port=settings.web_port,
         factory=True,
         log_level="info",
     )

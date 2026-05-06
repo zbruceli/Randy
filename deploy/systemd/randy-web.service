@@ -1,0 +1,24 @@
+# Web dashboard — user systemd unit.
+#
+# Install / logs: see deploy/systemd/randy.service. Same install pattern.
+#
+# Bind address comes from .env (WEB_HOST). On the LAN server set WEB_HOST=0.0.0.0
+# so phones on the network can reach it; default is 127.0.0.1 for dev machines.
+
+[Unit]
+Description=Randy web dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/randy
+EnvironmentFile=%h/randy/.env
+ExecStart=%h/randy/.venv/bin/python -m randy.web
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Install]
+WantedBy=default.target

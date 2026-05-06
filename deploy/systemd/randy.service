@@ -1,0 +1,33 @@
+# Telegram bot — user systemd unit.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/systemd/randy.service ~/.config/systemd/user/
+#   # If your install path is not $HOME/randy, adjust ExecStart and WorkingDirectory below.
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now randy
+#
+# So the unit survives logout, run once as the deploy user:
+#   loginctl enable-linger "$USER"
+#
+# Logs:
+#   journalctl --user -u randy -f
+
+[Unit]
+Description=Randy Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/randy
+EnvironmentFile=%h/randy/.env
+ExecStart=%h/randy/.venv/bin/python -m randy
+Restart=on-failure
+RestartSec=5
+# Avoid log spam when the bot retries on transient errors.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Install]
+WantedBy=default.target

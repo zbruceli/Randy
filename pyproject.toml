@@ -15,6 +15,8 @@ dependencies = [
     "uvicorn[standard]>=0.27",
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
+    "trafilatura>=1.10",
+    "yfinance>=0.2.40",
 ]
 
 [project.optional-dependencies]

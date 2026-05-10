@@ -21,6 +21,7 @@ from ..providers.cost_meter import CostCapExceeded, CostMeter
 from ..providers.deepseek_provider import DeepSeekProvider
 from ..providers.google_provider import GoogleProvider
 from ..providers.openai_provider import OpenAIProvider
+from ..research import ResearchBrief, Researcher
 from .profile_updater import extract_profile_update
 
 logger = logging.getLogger("randy.orchestrator")
@@ -45,9 +46,11 @@ class ConsultationResult:
     expert_reports_r2: dict[str, str] = field(default_factory=dict)
     expert_costs: dict[str, float] = field(default_factory=dict)        # cumulative per persona
     facilitator_cost: float = 0.0
+    research_cost: float = 0.0
     total_cost_usd: float = 0.0
     failures: dict[str, str] = field(default_factory=dict)
     rounds_run: int = 1
+    research: ResearchBrief | None = None
 
 
 def _build_experts() -> dict[str, Expert]:
@@ -90,7 +93,12 @@ def _build_thread_context(store: "MemoryStore | None", conversation_id: str | No
     return "\n".join(parts)
 
 
-def _build_brief(question: str, profile: UserProfile, thread_context: str = "") -> str:
+def _build_brief(
+    question: str,
+    profile: UserProfile,
+    thread_context: str = "",
+    research_markdown: str = "",
+) -> str:
     blocks = [
         "# About this user",
         "",
@@ -98,6 +106,19 @@ def _build_brief(question: str, profile: UserProfile, thread_context: str = "") 
     ]
     if thread_context:
         blocks.extend(["", thread_context])
+    if research_markdown:
+        blocks.extend(
+            [
+                "",
+                "# Verified facts (from external research, run before this prompt)",
+                "",
+                research_markdown,
+                "",
+                "Treat the above as **reported, attributed data** — not gospel. Cite "
+                "the bracketed source whenever you use a fact. Do NOT invent numbers, "
+                "dates, or quotes that are not in this section.",
+            ]
+        )
     blocks.extend(
         [
             "",
@@ -105,8 +126,8 @@ def _build_brief(question: str, profile: UserProfile, thread_context: str = "") 
             "",
             question,
             "",
-            "Use the user-context and any prior thread to ground your answer. "
-            "Don't repeat it back; use it.",
+            "Use the user-context, prior thread, and verified facts to ground your "
+            "answer. Don't repeat them back; use them.",
         ]
     )
     return "\n".join(blocks)
@@ -117,6 +138,7 @@ def _format_synthesis_brief(
     profile: UserProfile,
     drafts: dict[str, str],
     thread_context: str = "",
+    research_markdown: str = "",
 ) -> str:
     blocks = []
     for key in EXPERT_KEYS:
@@ -132,6 +154,17 @@ def _format_synthesis_brief(
     ]
     if thread_context:
         blocks.extend(["", thread_context])
+    if research_markdown:
+        blocks.extend(
+            [
+                "",
+                "# Verified facts (from external research)",
+                "",
+                research_markdown,
+                "",
+                "Cite the bracketed source for any fact you use in the synthesis.",
+            ]
+        )
     blocks.extend(
         [
             "",
@@ -227,9 +260,34 @@ async def run_consultation(
         )
         store.append_turn(session_id, role="user", content=question)
 
+    # Research phase — run BEFORE R1 with a hard timeout. Whatever's gathered
+    # gets injected into all expert + facilitator briefs.
+    research: ResearchBrief | None = None
+    research_markdown = ""
+    if on_progress:
+        await on_progress("Researching external facts…")
+    try:
+        researcher = Researcher(store=store)
+        research = await researcher.run(
+            question=question,
+            prior_context=thread_context,
+            session_id=session_id if store else None,
+            on_progress=on_progress,
+        )
+        research_markdown = research.markdown if research and research.markdown else ""
+        if on_progress and research:
+            note = (
+                f"  ✓ Research: {research.notes or 'done'}"
+                if not research.timed_out
+                else f"  ✗ Research timed out after {research.duration_s:.0f}s"
+            )
+            await on_progress(note)
+    except Exception:
+        logger.exception("researcher raised; proceeding without research brief")
+
     experts = _build_experts()
     facilitator = _build_facilitator()
-    brief = _build_brief(question, profile, thread_context)
+    brief = _build_brief(question, profile, thread_context, research_markdown)
 
     if on_progress:
         await on_progress("Round 1 — three experts working in parallel…")
@@ -328,7 +386,7 @@ async def run_consultation(
                 {
                     "role": "user",
                     "content": _format_synthesis_brief(
-                        question, profile, final_drafts, thread_context
+                        question, profile, final_drafts, thread_context, research_markdown
                     ),
                 }
             ],
@@ -368,6 +426,13 @@ async def run_consultation(
                 _update_profile_in_background(store, user_id, question, synthesis_text)
             )
 
+    research_cost = research.cost_usd if research else 0.0
+    if research_cost:
+        try:
+            meter.record(settings.researcher_model, research_cost)
+        except CostCapExceeded:
+            pass  # already recorded; cost meter just blocks future calls
+
     return ConsultationResult(
         session_id=session_id,
         user_id=user_id,
@@ -378,7 +443,9 @@ async def run_consultation(
         expert_reports_r2=drafts_r2,
         expert_costs=expert_costs,
         facilitator_cost=facilitator_cost,
+        research_cost=research_cost,
         total_cost_usd=meter.total,
         failures=failures,
         rounds_run=rounds_run,
+        research=research,
     )

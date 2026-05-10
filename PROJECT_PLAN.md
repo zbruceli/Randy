@@ -82,8 +82,17 @@ Voice, image, web UI, multi-user auth, mobile app, fine-tuning, RAG over externa
 - ✓ New commands: `/threads` (browse pinned), `/here` (show current), `/end` (leave thread).
 - ✓ HTML parse mode for static UI strings (more reliable than legacy Markdown for our copy).
 
+### Phase 7 — Research grounding ✓
+- ✓ `randy.research` package: Brave Search client, URL fetcher (httpx + trafilatura main-text extraction), yfinance market snapshots, Gemini-Flash entity extractor and distiller.
+- ✓ Pre-R1 research phase, time-boxed (default 30s). Whatever's collected on timeout is what experts see.
+- ✓ Verified-facts injection into every expert + facilitator brief. Personas are instructed to cite bracketed sources and not invent numbers.
+- ✓ Facts persisted to `facts` table; raw extracted text + `index.csv` written under `data/research/<session>/`.
+- ✓ Web `/facts` browser (topics summary + per-topic drill-down with confidence/volatility tags) and per-session research panel on the conversation page.
+- ✓ Telegram synthesis footer surfaces source count; full research brief + sources go in the `.md` attachment.
+
 ### Open
 - Auto-title via Gemini Flash for nicer thread titles (currently first-60-chars truncate).
+- Per-persona tool use during R1/R2 (deeper grounding when an expert wants to verify a specific claim — Phase B of research).
 - Prompt caching beyond Anthropic (OpenAI's auto-cache is implicit; Google explicit context cache).
 - Telegram Mini App pointing at the dashboard (deferred — needs public HTTPS hosting).
 

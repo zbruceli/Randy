@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Facts — Randy{% endblock %}
+{% block content %}
+
+<section>
+  <h1>Verified facts</h1>
+  <p class="muted">
+    Facts gathered by the researcher across all sessions. Click a topic to drill in,
+    or scroll for the most recent additions.
+  </p>
+
+  {% if topics %}
+  <h2>Topics</h2>
+  <div class="card-grid">
+    {% for t in topics %}
+      <a class="card" href="/facts?topic={{ t.topic|urlencode }}">
+        <div class="card-title">{{ t.topic }}</div>
+        <div class="card-meta">
+          {{ t.fact_count }} fact{{ "s" if t.fact_count != 1 else "" }} ·
+          {{ t.last_seen[:10] }}
+        </div>
+      </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">No facts collected yet. Ask the committee a question that mentions a
+  real-world entity (a company, market, or person) and the researcher will populate
+  this page.</p>
+  {% endif %}
+
+  {% if recent %}
+  <h2>Recent</h2>
+  <ul class="record-list">
+    {% for f in recent %}
+    <li class="fact">
+      <span class="record-date">{{ f.retrieved_at[:10] }}</span>
+      <span class="fact-topic"><a href="/facts?topic={{ f.topic|urlencode }}">{{ f.topic }}</a></span>
+      <span class="fact-claim">{{ f.claim }}</span>
+      {% if f.source_url %}
+        <a class="muted small" href="{{ f.source_url }}" target="_blank" rel="noreferrer">source ↗</a>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
+{% endblock %}

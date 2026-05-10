@@ -33,6 +33,20 @@ class ConversationRow:
     updated_at: str
 
 
+@dataclass
+class FactRow:
+    fact_id: str
+    session_id: str | None
+    topic: str
+    claim: str
+    source_url: str | None
+    source_title: str | None
+    raw_excerpt: str | None
+    volatility: str        # 'evergreen' | 'slow' | 'volatile'
+    confidence: str        # 'verified' | 'reported' | 'estimated'
+    retrieved_at: str
+
+
 class MemoryStore:
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -299,6 +313,94 @@ class MemoryStore:
                 (conversation_id,),
             ).fetchall()
         return [SessionRow(**dict(r)) for r in rows]
+
+    # ---- facts ----
+
+    def upsert_fact(
+        self,
+        *,
+        fact_id: str,
+        session_id: str | None,
+        topic: str,
+        claim: str,
+        source_url: str | None = None,
+        source_title: str | None = None,
+        raw_excerpt: str | None = None,
+        volatility: str = "slow",
+        confidence: str = "reported",
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO facts(fact_id, session_id, topic, claim, source_url,
+                                  source_title, raw_excerpt, volatility, confidence, retrieved_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(fact_id) DO UPDATE SET
+                    session_id   = excluded.session_id,
+                    claim        = excluded.claim,
+                    source_url   = excluded.source_url,
+                    source_title = excluded.source_title,
+                    raw_excerpt  = excluded.raw_excerpt,
+                    volatility   = excluded.volatility,
+                    confidence   = excluded.confidence,
+                    retrieved_at = excluded.retrieved_at
+                """,
+                (
+                    fact_id, session_id, topic, claim, source_url,
+                    source_title, raw_excerpt, volatility, confidence, _now(),
+                ),
+            )
+
+    def find_facts_by_topic(
+        self, topic: str, *, max_age_seconds: int | None = None, limit: int = 20
+    ) -> list[FactRow]:
+        params: list = [topic]
+        clauses = ["topic = ?"]
+        if max_age_seconds is not None:
+            from datetime import datetime, timedelta, timezone
+            cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)).isoformat(timespec="seconds")
+            clauses.append("retrieved_at >= ?")
+            params.append(cutoff)
+        sql = (
+            "SELECT * FROM facts WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY retrieved_at DESC LIMIT ?"
+        )
+        params.append(limit)
+        with self._conn() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [FactRow(**dict(r)) for r in rows]
+
+    def session_facts(self, session_id: str) -> list[FactRow]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM facts WHERE session_id = ? ORDER BY topic, retrieved_at",
+                (session_id,),
+            ).fetchall()
+        return [FactRow(**dict(r)) for r in rows]
+
+    def recent_facts(self, *, limit: int = 50) -> list[FactRow]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM facts ORDER BY retrieved_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [FactRow(**dict(r)) for r in rows]
+
+    def topics_summary(self, limit: int = 50) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT topic,
+                       COUNT(*) AS fact_count,
+                       MAX(retrieved_at) AS last_seen
+                FROM facts
+                GROUP BY topic
+                ORDER BY last_seen DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     # ---- per-chat active thread ----
 

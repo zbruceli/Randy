@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}{{ topic }} — Facts — Randy{% endblock %}
+{% block content %}
+
+<section>
+  <a href="/facts" class="muted small">← all topics</a>
+  <h1>{{ topic }}</h1>
+
+  {% if facts %}
+  <ul class="record-list">
+    {% for f in facts %}
+    <li class="fact">
+      <span class="record-date">{{ f.retrieved_at[:10] }}</span>
+      <span class="fact-claim">{{ f.claim }}</span>
+      {% if f.confidence %}<span class="fact-tag fact-{{ f.confidence }}">{{ f.confidence }}</span>{% endif %}
+      {% if f.volatility %}<span class="fact-tag fact-{{ f.volatility }}">{{ f.volatility }}</span>{% endif %}
+      {% if f.source_url %}
+        <a class="muted small" href="{{ f.source_url }}" target="_blank" rel="noreferrer">source ↗</a>
+      {% endif %}
+      {% if f.raw_excerpt %}
+        <details>
+          <summary class="muted small">excerpt</summary>
+          <pre class="excerpt">{{ f.raw_excerpt }}</pre>
+        </details>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No facts for {{ topic }}.</p>
+  {% endif %}
+</section>
+
+{% endblock %}

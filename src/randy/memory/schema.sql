@@ -61,3 +61,23 @@ CREATE TABLE IF NOT EXISTS chat_active_thread (
     conversation_id TEXT REFERENCES conversations(conversation_id),
     updated_at      TEXT NOT NULL
 );
+
+-- Researched facts: ground-truth claims pulled from external sources before
+-- R1, shared across all personas in a session. Volatility tags drive cache
+-- staleness for cross-session reuse.
+CREATE TABLE IF NOT EXISTS facts (
+    fact_id         TEXT PRIMARY KEY,
+    session_id      TEXT REFERENCES sessions(session_id),
+    topic           TEXT NOT NULL,
+    claim           TEXT NOT NULL,
+    source_url      TEXT,
+    source_title    TEXT,
+    raw_excerpt     TEXT,
+    volatility      TEXT NOT NULL DEFAULT 'slow',
+    confidence      TEXT NOT NULL DEFAULT 'reported',
+    retrieved_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_facts_topic ON facts(topic);
+CREATE INDEX IF NOT EXISTS idx_facts_session ON facts(session_id);
+CREATE INDEX IF NOT EXISTS idx_facts_retrieved ON facts(retrieved_at);

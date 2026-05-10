@@ -189,9 +189,25 @@ Both channels thread:
 - `concurrent_updates(True)` on the Telegram Application — without it, callback-query updates (the cancel button) serialize behind the consultation handler and never fire while the handler is still awaiting its task.
 - Progress-edit debounce: when R1's three experts finish in quick succession, each `_run_expert` calls `on_progress("✓ done")` in parallel. Three concurrent `editMessageText` calls on the same chat trigger Telegram's ~1/sec/chat edit rate limit, and PTB's RetryAfter handler then sleeps silently — blocking gather and freezing the orchestrator. The bot wraps `on_progress` in a 1.2s debounce + `asyncio.Lock` so concurrent edits drop instead of queue, and the next eligible edit always shows the latest internal state. `chat_action` keeps firing on every call (it's not rate-limited).
 
+## Research phase (Phase A grounding)
+
+Before R1, the orchestrator runs a `Researcher` that:
+
+1. **Extracts entities** from the question via Gemini Flash returning structured JSON: `topics`, `search_queries`, `tickers`. The prompt biases toward researching whenever a real-world entity is named — only purely-internal questions ("how do I handle anxiety?") get an empty response.
+2. **Searches the web** via the Brave Search API (free 2k/month tier; uses `BRAVE_API_KEY`). Multiple queries in parallel.
+3. **Fetches top URLs** via `httpx` + `trafilatura` for main-text extraction. Up to ~12 URLs/session, capped per topic.
+4. **Pulls market data** via `yfinance` for any tickers (offloaded to a thread since the lib is sync).
+5. **Distills findings** into a markdown brief with bracketed citations via Gemini Flash again.
+6. **Injects the brief** into every expert's prompt and the facilitator's synthesis prompt. All personas are instructed to cite bracketed sources and not invent unattributed numbers.
+7. **Persists** structured facts to the `facts` table (one per source URL + one per market snapshot) and writes raw extracted page text + `index.csv` under `data/research/<session_id>/`.
+
+Time-bounded: `RESEARCH_TIMEOUT_SECONDS` (default 30) caps the entire phase. On timeout, the brief is `(Research timed out — proceeding without grounding)` and R1 starts immediately.
+
+Volatility tagging on insert (`evergreen` / `slow` / `volatile`) lets `find_facts_by_topic(max_age_seconds=...)` skip stale entries — relevant for cross-session reuse (not yet wired; v1 always fetches fresh).
+
 ## What's deliberately *not* here
 
-- No vector DB / RAG. Profile + recent context fits in long-context windows easily.
+- No vector DB / RAG over a pre-built corpus. Research is on-demand per question.
+- No per-persona tool use during R1/R2 in v1. Research is a *shared* pre-fetch; experts can't drill in further mid-response. Adding tool-use round trips is a future Phase B.
 - No clarification round (the original 4-stage design had one). Empirically, the facilitator's synthesis quality didn't justify the extra latency.
 - No queueing / sessions registry. One consultation per user at a time, in-process.
-- No prompt caching yet. With per-session cost in the $0.05–$0.20 range, the engineering cost of caching exceeds the savings — for now.

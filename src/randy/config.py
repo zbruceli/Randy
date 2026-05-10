@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     google_api_key: str = ""
     deepseek_api_key: str = ""
+    brave_api_key: str = ""
 
     telegram_bot_token: str = ""
     telegram_allowed_user_ids: str = ""
@@ -26,6 +27,14 @@ class Settings(BaseSettings):
     expert_anthropic_model: str = "claude-sonnet-4-6"
     expert_openai_model: str = "gpt-5.5"
     expert_deepseek_model: str = "deepseek-v4-pro"
+
+    # Researcher uses a cheaper Flash-tier model for entity extraction +
+    # distillation. Hard cap on the whole research phase before R1 starts.
+    researcher_model: str = "gemini-flash-latest"
+    research_timeout_seconds: float = 30.0
+    research_max_topics: int = 4
+    research_max_results_per_topic: int = 3
+    research_dir: str = "./data/research"
 
 
 settings = Settings()

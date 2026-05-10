@@ -353,6 +353,23 @@ def _format_drafts_attachment(result: ConsultationResult) -> bytes:
         "---",
         "",
     ]
+    if result.research and not result.research.is_empty():
+        parts.append("## Research brief")
+        parts.append("")
+        parts.append(result.research.markdown)
+        parts.append("")
+        if result.research.sources:
+            parts.append("**Sources:**")
+            for s in result.research.sources:
+                parts.append(f"- [{s.title}]({s.url})")
+            parts.append("")
+        if result.research.market_snapshots:
+            parts.append("**Market data:**")
+            for m in result.research.market_snapshots:
+                parts.append(f"- {m.summary}")
+            parts.append("")
+        parts.append("---")
+        parts.append("")
     for key in ("strategist", "contrarian", "operator"):
         if key not in result.expert_reports_r1 and key not in result.expert_reports_r2:
             continue
@@ -512,8 +529,14 @@ async def _consult(
     is_active = store.get_active_thread(chat.id) == conversation_id
     result_kb = _result_keyboard(conversation_id, pinned=is_pinned, in_active_thread=is_active)
 
+    research_bits = ""
+    if result.research and not result.research.is_empty():
+        rsrc_count = len(result.research.sources) + len(result.research.market_snapshots)
+        if rsrc_count:
+            research_bits = f" · 🔎 {rsrc_count} source{'s' if rsrc_count != 1 else ''}"
     footer = (
         f"\n\n_session {result.session_id} · ${result.total_cost_usd:.4f} total"
+        + research_bits
         + (f" · {len(result.failures)} failure(s)" if result.failures else "")
         + "_"
     )

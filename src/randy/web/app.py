@@ -150,17 +150,19 @@ def create_app() -> FastAPI:
         if not conv:
             raise HTTPException(404, "conversation not found")
         sessions = store.sessions_in_conversation(conversation_id)
-        # Hydrate each session with its turns.
+        # Hydrate each session with its turns + research facts.
         rendered = []
         for s in sessions:
             turns = store.session_turns(s.session_id)
             synth = next((t for t in turns if t["role"] == "facilitator"), None)
             experts = [t for t in turns if t["role"] in ("expert_r1", "expert_r2", "expert")]
+            facts = store.session_facts(s.session_id)
             rendered.append(
                 {
                     "session": s,
                     "synthesis": synth["content"] if synth else None,
                     "experts": experts,
+                    "facts": facts,
                 }
             )
         round2_default = store.get_round2_enabled(WEB_USER_ID)
@@ -196,6 +198,23 @@ def create_app() -> FastAPI:
     async def profile_page(request: Request):
         profile = store.get_profile(WEB_USER_ID)
         return _TEMPLATES.TemplateResponse(request, "profile.html", {"profile": profile})
+
+    @app.get("/facts", response_class=HTMLResponse)
+    async def facts_index(request: Request, topic: str | None = None):
+        if topic:
+            facts = store.find_facts_by_topic(topic, limit=50)
+            return _TEMPLATES.TemplateResponse(
+                request,
+                "facts_topic.html",
+                {"topic": topic, "facts": facts},
+            )
+        topics = store.topics_summary(limit=50)
+        recent = store.recent_facts(limit=20)
+        return _TEMPLATES.TemplateResponse(
+            request,
+            "facts.html",
+            {"topics": topics, "recent": recent},
+        )
 
     EDITABLE_LIST_FIELDS = {"goals", "constraints", "open_questions"}
 

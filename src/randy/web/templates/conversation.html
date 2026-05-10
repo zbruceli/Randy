@@ -32,6 +32,22 @@
       {% else %}
       <div class="muted">_(synthesis missing — session may have been cancelled)_</div>
       {% endif %}
+      {% if s.facts %}
+      <details class="research">
+        <summary>🔎 Research ({{ s.facts|length }} fact{{ "s" if s.facts|length != 1 else "" }})</summary>
+        <ul class="record-list">
+          {% for f in s.facts %}
+          <li class="fact">
+            <span class="fact-topic"><a href="/facts?topic={{ f.topic|urlencode }}">{{ f.topic }}</a></span>
+            <span class="fact-claim">{{ f.claim }}</span>
+            {% if f.source_url %}
+              <a class="muted small" href="{{ f.source_url }}" target="_blank" rel="noreferrer">↗</a>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
       {% if s.experts %}
       <details class="experts">
         <summary>Expert drafts ({{ s.experts|length }})</summary>

@@ -15,6 +15,8 @@ Both share the same SQLite database, the same `ConsultationRunner`, and the same
 
 After each session, Randy auto-extracts durable goals, decisions, and constraints into a profile that grounds future answers.
 
+**Research grounding.** Before round 1, a Researcher (Gemini Flash + Brave Search + URL fetch + yfinance) extracts entities from the question, gathers verified facts, and injects them into every persona's brief. All three experts argue from the same ground truth instead of hallucinating company numbers, dates, or quotes. Time-boxed (default 30s); facts persist to a `facts` table and `data/research/<session>/` for browse + reuse.
+
 The committee:
 
 | Role | Vendor / model | Job |
@@ -36,7 +38,8 @@ python -m randy.web   # listens on 127.0.0.1:8000
 
 Pages:
 - `/` — ask form + pinned conversations + recent threads + spend rail.
-- `/c/<id>` — conversation thread view; follow-up form prepends prior synthesis automatically. Pin / archive / rename.
+- `/c/<id>` — conversation thread view; follow-up form prepends prior synthesis automatically. Pin / archive / rename. Per-session research panel shows the verified facts the experts saw.
+- `/facts` — browse all researched facts by topic; click a topic for the full claim list with sources, volatility, and confidence tags.
 - `/profile` — inline-editable profile (save on blur for goals, constraints, open questions, notes; ✕ buttons remove auto-populated decisions or things-tried entries).
 
 In-flight consultations show a progress card that polls `/progress/<task_id>` every 2s and swaps in the result when done. The same ⏹ Cancel button as the Telegram bot.
